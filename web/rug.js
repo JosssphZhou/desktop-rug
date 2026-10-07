@@ -107,8 +107,9 @@ for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
   if (i < NX) addC(k, idx(i + 1, j), 1);
   if (j < NY) addC(k, idx(i, j + 1), 1);
   if (i < NX && j < NY) { addC(k, idx(i + 1, j + 1), 0.9); addC(idx(i + 1, j), idx(i, j + 1), 0.9); }
-  if (i < NX - 1) addC(k, idx(i + 2, j), 0.16);
-  if (j < NY - 1) addC(k, idx(i, j + 2), 0.16);
+  // 弯曲约束偏硬：厚毯子折起来是圆弧，不会折出尖角
+  if (i < NX - 1) addC(k, idx(i + 2, j), 0.42);
+  if (j < NY - 1) addC(k, idx(i, j + 2), 0.42);
 }
 const CA = Int32Array.from(cA), CB = Int32Array.from(cB), CL = Float32Array.from(cL), CS = Float32Array.from(cS);
 const NC = CA.length;
@@ -217,8 +218,8 @@ let grabK = -1;
 let grabTarget = null;
 let grabStart = null;
 let releasedAt = 0;
-const GRAVITY = 2600;
-const LAYER = 3.2;   // 翻过来的那一层比底下高出的距离
+const GRAVITY = 4200;   // 比丝巾重：下落快，不飘
+const LAYER = 1.5;   // 翻过来那一层的正面离底下一层的距离；厚度另由背面偏移体现
 
 function updateFloor() {
   for (let k = 0; k < N; k++) floorZ[k] = bumpAt(pos[k * 3], pos[k * 3 + 1]) + (flipped[k] ? LAYER : 0);
@@ -226,7 +227,7 @@ function updateFloor() {
 
 function step(dt, restoreK) {
   const g = GRAVITY * dt * dt;
-  const damp = restoreK > 0 ? 0.93 : 0.985;
+  const damp = restoreK > 0 ? 0.9 : 0.965;   // 阻尼大，落地后很快停住
   for (let k = 0; k < N; k++) {
     if (inv[k] === 0) continue;
     const o = k * 3;
@@ -348,7 +349,7 @@ let surfaceTex = null;
 let surfaceBorn = 0;
 // 正面用带绒面光泽的材质：朝光的坡面会亮起一层柔和的高光，像羊毛绒头
 const frontMat = new THREE.MeshPhysicalMaterial({ roughness: 0.85, specularIntensity: 0.3, metalness: 0, side: THREE.FrontSide, sheen: 0.3, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffe2c0) });
-const backMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, side: THREE.BackSide, color: 0x9a8c7a });
+const backMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, side: THREE.BackSide });
 for (const m of [frontMat, backMat]) {
   m.onBeforeCompile = (shader) => {
     shader.uniforms.overlayMap = { value: overlayTex };
@@ -358,12 +359,79 @@ for (const m of [frontMat, backMat]) {
     );
   };
 }
+// 背面是地毯背后的织底：花纹褪色偏麻色，上面是一格一格的经纬结
+backMat.onBeforeCompile = (shader) => {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <map_fragment>',
+    `#include <map_fragment>
+    #ifdef USE_MAP
+    float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+    vec3 jute = vec3(0.56, 0.46, 0.33);
+    diffuseColor.rgb = mix(mix(diffuseColor.rgb, vec3(lum), 0.55), jute, 0.35) * 0.82;
+    vec2 g = abs(fract(vMapUv * vec2(210.0, 140.0)) - 0.5);
+    float knot = smoothstep(0.3, 0.5, max(g.x, g.y));
+    diffuseColor.rgb *= 1.0 - 0.32 * knot;
+    #endif`,
+  );
+};
+
+// 厚度：正面在布料点上，背面沿法线往下偏移一个厚度，四周再补一圈侧边
+const thick = () => place.width * 0.009;
+const backPos = new Float32Array(N * 3);
+const backGeo = new THREE.BufferGeometry();
+const backAttr = new THREE.BufferAttribute(backPos, 3);
+backAttr.setUsage(THREE.DynamicDrawUsage);
+backGeo.setAttribute('position', backAttr);
+backGeo.setAttribute('uv', geo.getAttribute('uv'));
+backGeo.setIndex(tri);
+const backNrm = new THREE.BufferAttribute(new Float32Array(N * 3), 3);
+backGeo.setAttribute('normal', backNrm);
+
+const RING = [];
+for (let i = 0; i < NX; i++) RING.push(idx(i, 0));
+for (let j = 0; j < NY; j++) RING.push(idx(NX, j));
+for (let i = NX; i > 0; i--) RING.push(idx(i, NY));
+for (let j = NY; j > 0; j--) RING.push(idx(0, j));
+const sidePos = new Float32Array(RING.length * 2 * 3);
+const sideGeo = new THREE.BufferGeometry();
+const sideAttr = new THREE.BufferAttribute(sidePos, 3);
+sideAttr.setUsage(THREE.DynamicDrawUsage);
+sideGeo.setAttribute('position', sideAttr);
+const sideIdx = [];
+for (let r = 0; r < RING.length; r++) {
+  const a = r * 2, b = ((r + 1) % RING.length) * 2;
+  sideIdx.push(a, a + 1, b, b, a + 1, b + 1);
+}
+sideGeo.setIndex(sideIdx);
+const sideMat = new THREE.MeshStandardMaterial({ color: 0x2b1e16, roughness: 1, side: THREE.DoubleSide });
+
+function updateThickness() {
+  const T = thick();
+  const n = geo.attributes.normal.array;
+  for (let k = 0; k < N * 3; k += 3) {
+    backPos[k] = pos[k] - n[k] * T;
+    backPos[k + 1] = pos[k + 1] - n[k + 1] * T;
+    backPos[k + 2] = pos[k + 2] - n[k + 2] * T;
+  }
+  backNrm.array.set(n);
+  backAttr.needsUpdate = true; backNrm.needsUpdate = true;
+  for (let r = 0; r < RING.length; r++) {
+    const k = RING[r] * 3, o = r * 6;
+    sidePos[o] = pos[k]; sidePos[o + 1] = pos[k + 1]; sidePos[o + 2] = pos[k + 2];
+    sidePos[o + 3] = backPos[k]; sidePos[o + 4] = backPos[k + 1]; sidePos[o + 5] = backPos[k + 2];
+  }
+  sideAttr.needsUpdate = true;
+  sideGeo.computeVertexNormals();
+}
+
 const front = new THREE.Mesh(geo, frontMat);
 front.castShadow = true; front.receiveShadow = true;
-const back = new THREE.Mesh(geo, backMat);
+const back = new THREE.Mesh(backGeo, backMat);
 back.receiveShadow = true;
-front.frustumCulled = back.frustumCulled = false;
-scene.add(front, back);
+const side = new THREE.Mesh(sideGeo, sideMat);
+side.castShadow = true; side.receiveShadow = true;
+front.frustumCulled = back.frustumCulled = side.frustumCulled = false;
+scene.add(front, back, side);
 
 let materialId = MATERIAL_IDS.includes(params.get('material')) ? params.get('material') : 'persian';
 function setMaterial(id) {
@@ -584,8 +652,8 @@ function loop(t) {
   phaseT += dtFrame;
 
   if (phase !== 'idle') {
-    if (phase === 'falling' && phaseT > 0.35) { refitPlacement(); phase = 'restoring'; phaseT = 0; }
-    const restoreK = phase === 'restoring' ? Math.min(phaseT / 0.3, 1) * (phaseT > 2.2 ? 260 : 70) : 0;
+    if (phase === 'falling' && phaseT > 0.22) { refitPlacement(); phase = 'restoring'; phaseT = 0; }
+    const restoreK = phase === 'restoring' ? Math.min(phaseT / 0.2, 1) * (phaseT > 1.6 ? 300 : 115) : 0;
     updateFloor();
     const SUB = 2;
     for (let s = 0; s < SUB; s++) step(dtFrame / SUB, restoreK);
@@ -611,6 +679,7 @@ function loop(t) {
   if (needsRender) {
     posAttr.needsUpdate = true;
     geo.computeVertexNormals();
+    updateThickness();
     updateFringe();
     const [lx, ly] = [place.cx, place.cy];
     sun.position.set(lx - 700, ly + 760, 640);   // 斜射光，鼓包和褶皱才有明暗
