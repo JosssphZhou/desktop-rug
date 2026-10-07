@@ -80,6 +80,7 @@ def main():
  parser=argparse.ArgumentParser(description=__doc__)
  parser.add_argument('--cycle',required=True,type=int)
  parser.add_argument('--params',default=','.join(PLAN))
+ parser.add_argument('--recheck',action='store_true',help='补充同一整轮中已扫参数的细值，不增加整轮计数')
  args=parser.parse_args()
  os.chdir(ROOT);CACHE.mkdir(parents=True,exist_ok=True)
  if subprocess.check_output(['git','branch','--show-current'],text=True).strip()!='astra-爬坡':raise RuntimeError('不在授权任务分支')
@@ -124,7 +125,7 @@ def main():
   state['baseline']=baseline;save()
  for param in args.params.split(','):
   if param not in PLAN:raise ValueError(param)
-  if param in cycle['visited']:raise RuntimeError(f'本轮已扫过{param}，不要重复登记')
+  if param in cycle['visited'] and not args.recheck:raise RuntimeError(f'本轮已扫过{param}，不要重复登记')
   config=read_tuning();initial=config.get(param,PLAN[param][0]);images=[]
   official=evaluate(config,f'{param}-current-full',False)
   base=evaluate(config,f'{param}-current',True)
@@ -139,9 +140,11 @@ def main():
     if image is not None:images.append(image)
    return row
   for value in PLAN[param][1]:test_value(value)
-  usable=[r for r in candidates if r['valid'] and eligible(r['score'],base['score']) and all(r['score']['segments'][k]['iou']>=state['baseline']['score']['segments'][k]['iou']-cap for k,cap in CAPS.items())]
-  center=max(usable,key=lambda r:r['total'])['config'][param] if usable else initial
+  valid=[r for r in candidates if r['valid']]
+  # 粗扫的最高分即使卡在分段门槛外，也要探查附近；最终保留仍严格检查门槛。
+  center=max(valid,key=lambda r:r['total'])['config'][param] if valid else initial
   coarse=PLAN[param][1];step=min(b-a for a,b in zip(coarse,coarse[1:]))/4
+  if param=='iter':step=max(1,step) # 整数参数必须实际测试相邻整数，不能舍入回原值。
   fine=set()
   for delta in [-step,-step/2,step/2,step]:
    value=round(center+delta,6)
@@ -156,7 +159,8 @@ def main():
    if exact['valid']:
     image=visual_strip(Path(exact['path']),f'FULL {param}={value:g} total={exact["total"]:.6f}')
     if image is not None:images.append(image)
-   if not exact['valid'] or not eligible(exact['score'],official['score']):continue
+   if not exact['valid'] or not eligible(exact['score'],official['score']):
+    candidate['exact_rejected']=str(exact['path']);save();continue
    if any(exact['score']['segments'][k]['iou']<state['baseline']['score']['segments'][k]['iou']-cap for k,cap in CAPS.items()):continue
    before=TUNING.read_text();write_tuning(cfg)
    testdir=CACHE/f'regress-c{args.cycle}-{param}-{value:g}'
@@ -175,7 +179,8 @@ def main():
    cycle['kept'].append({'param':param,'from':initial,'to':value,'total':exact['total'],'testdir':str(testdir),'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()})
    print('保留',message,flush=True)
    break
-  cycle['visited'].append(param);save()
+  if param not in cycle['visited']:cycle['visited'].append(param)
+  save()
   if images:
    cv2.imwrite(str(CACHE/f'cycle{args.cycle}-{param}-review.jpg'),np.vstack(images))
   # 当前版本对比图也属于本轮临时截图，看板之外不重复保留。
@@ -187,6 +192,10 @@ def main():
     if row['valid']:
      r=row['score'];vals=' | '.join(f'{v:.6f}' for v in [r['total'],*[v['iou'] for v in r['segments'].values()]])
      result='候选；以原分辨率确认结果为准' if accepted and value==accepted['config'][param] else '未保留'
+     if not accepted or value!=accepted['config'][param]:
+      drops=[k for k,cap in CAPS.items() if r['segments'][k]['iou']<base['score']['segments'][k]['iou']-cap or r['segments'][k]['iou']<state['baseline']['score']['segments'][k]['iou']-cap]
+      result='分段下降超限：'+','.join(drops) if drops else '总分未提升'
+     if row.get('exact_rejected'):result='原分辨率确认未达保留条件'
      if row.get('regression_rejected'):result='回归失败，退回'
      f.write(f'| 二轮{args.cycle} | {param}={value:g} | {vals} | {result} |\n')
     else:f.write(f'| 二轮{args.cycle} | {param}={value:g} | 无分数 | — | — | — | — | 重放抓空或失败，未保留 |\n')
