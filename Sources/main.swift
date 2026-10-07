@@ -18,6 +18,7 @@ struct Options {
     var pose: String? = nil
     var alwaysRender = false
     var testMenu = false
+    var level: Int? = nil   // 调试用：直接指定窗口层级的数值
     var reset = false
     var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
@@ -38,6 +39,7 @@ struct Options {
             case "--pose": pose = next(); alwaysRender = true
             case "--always-render": alwaysRender = true
             case "--test-menu": testMenu = true
+            case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
             case "--plain": extraQuery.append("plain=1")
             default: break
@@ -129,13 +131,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if options.reset { currentMaterial = "persian"; UserDefaults.standard.set("persian", forKey: "material") }
         if let m = options.material { currentMaterial = m }
 
-        let screen = NSScreen.main!
+        let screen = NSScreen.screens[0]   // 菜单栏所在的主屏。NSScreen.main 跟着键盘焦点走，启动时可能落在副屏上
         let frame = screen.frame
         window = RugWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+        window.level = NSWindow.Level(rawValue: options.level ?? (Int(CGWindowLevelForKey(.desktopIconWindow)) + 1))
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
         window.ignoresMouseEvents = true
         window.acceptsMouseMovedEvents = true
