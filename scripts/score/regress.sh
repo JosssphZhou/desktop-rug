@@ -1,5 +1,5 @@
 #!/bin/bash
-# 在外层 testq 内运行，五类串行；拖动需追加两次独立确认，避免一次偶然通过。
+# 在外层 testq 内运行，六类串行；拖动需追加两次独立确认，避免一次偶然通过。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$PWD"
@@ -8,7 +8,7 @@ export TMPDIR="$ROOT/.score-cache/tmp/" XDG_CACHE_HOME="$ROOT/.score-cache/home/
 export CFFIXED_USER_HOME="$ROOT/.score-cache/home"
 OUT="${1:?提供本轮日志目录}"
 mkdir -p "$OUT"
-for test in drag middle flatten option fold; do
+for test in drag middle flatten option fold fullscreen; do
   python3 -c 'import os; s=os.statvfs("/"); assert s.f_bavail*s.f_frsize>=11e9, "内置盘低于11GB，停止"'
   for attempt in 1 2; do
     ./scripts/test-"$test".sh > "$OUT/$test-$attempt.txt" 2>&1
