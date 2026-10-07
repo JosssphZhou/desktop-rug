@@ -78,7 +78,8 @@ if (params.get('rug')) {
   const p = toWorld(x, y);
   place = { cx: p.x, cy: p.y, angle: 0, width: w || place.width };
 }
-const savePlace = () => { try { localStorage.setItem('rug.place', JSON.stringify(place)); } catch (e) {} };
+// 测试时用 --rug 指定了位置，就不写回本地存储，免得覆盖老板平时摆好的位置
+const savePlace = () => { if (params.get('rug')) return; try { localStorage.setItem('rug.place', JSON.stringify(place)); } catch (e) {} };
 
 // ---------- 布料 ----------
 const NX = 70, NY = 44;   // 网格是正方形，宽高比 70:44 约等于参考视频里的 1.6
@@ -598,7 +599,7 @@ const _sv = new THREE.Vector3();
 function setSelected(b) {
   if (b === selOn) return;
   if (!b) { selFrom.w = selNow.w; selFrom.h = selNow.h; selFrom.z = selNow.z; }
-  selOn = b; selT0 = performance.now();
+  selOn = b; selT0 = now();
   // 选中时布先放平（参考视频 f1030 右上角的翘角在选中后 24 帧内拉平）
   if (b && (deformed || phase === 'falling')) flatten();
   wake();
@@ -670,7 +671,7 @@ function publishHit() {
   let flat = [];
   if (phase === 'idle') {
     // 静止时用四个角，按 Option 时往外扩一点把角上的控制点也算进去；流苏也算在地毯里
-    let pts = idleOutline(optionDown ? 26 : 10);
+    let pts = idleOutline(optionDown ? 36 : 10);
     const pr = optionDown && selUI().pill;
     if (pr) pts = hullOf(pts.concat([[pr[0], pr[1]], [pr[0] + pr[2], pr[1]], [pr[0] + pr[2], pr[1] + pr[3] + 4], [pr[0], pr[1] + pr[3] + 4]]));
     for (const [x, y] of pts) flat.push(Math.round(x), Math.round(y));
@@ -692,6 +693,7 @@ const handles = [0, 1, 2, 3].map(() => {
   document.body.appendChild(d);
   return d;
 });
+const HOT = '#2f7cf6';
 const PILL_W = 136, PILL_H = 36, PILL_GAP = 24;
 const ICON_SWATCH = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2" width="5" height="12" rx="1.6"/><path d="M6.5 5.2l3.6-2.1a1.4 1.4 0 0 1 1.9.5l3 5.2a1.4 1.4 0 0 1-.5 1.9L6.5 14"/><circle cx="4" cy="11.3" r=".9" fill="currentColor"/></svg>';
 const ICON_TRASH = '<svg width="13" height="15" viewBox="0 0 13 15" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 3.2h11M4.5 3.2V1.6h4v1.6M2.4 3.2l.8 10.2h6.6l.8-10.2M5 5.8v5.3M8 5.8v5.3"/></svg>';
@@ -728,14 +730,16 @@ function selUI() {
   return {
     handles: show ? cs : null,
     pill: show && selNow.h > 0.6 ? [ccx - PILL_W / 2, bottom + PILL_GAP, PILL_W, PILL_H] : null,
-    bubble: mode === 'transform' && tf && tf.kind === 'scale' ? [pointerX + 14, pointerY + 10, deg + '°'] : null,
+    bubble: mode === 'transform' && tf && tf.kind === 'rotate' ? [pointerX + 14, pointerY + 10, deg + '°'] : null,
+    // 光标停在角点上（或正按着角点缩放）时，那个角点变蓝（参考视频 f1300）
+    hot: show ? cs.findIndex(([x, y], i) => (mode === 'transform' && tf ? tf.kind === 'scale' && i === tf.ci : Math.hypot(x - pointerX, y - pointerY) < 10)) : -1,
   };
 }
 function updateHandles() {
   const ui = selUI();
   handles.forEach((h, i) => {
     h.style.display = ui.handles ? 'block' : 'none';
-    if (ui.handles) { h.style.left = ui.handles[i][0] + 'px'; h.style.top = ui.handles[i][1] + 'px'; }
+    if (ui.handles) { h.style.left = ui.handles[i][0] + 'px'; h.style.top = ui.handles[i][1] + 'px'; h.style.background = i === ui.hot ? HOT : '#fff'; }
   });
   pill.style.display = ui.pill ? 'flex' : 'none';
   if (ui.pill) { pill.style.left = ui.pill[0] + 'px'; pill.style.top = ui.pill[1] + 'px'; }
@@ -745,7 +749,7 @@ function updateHandles() {
 // 录像和调试截图里没有 DOM，把同样的东西画到二维画布上
 function drawSelUI(g, ox, oy) {
   const ui = selUI();
-  if (ui.handles) for (const [x, y] of ui.handles) { g.beginPath(); g.arc(x - ox, y - oy, 4, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); }
+  if (ui.handles) for (const [i, [x, y]] of ui.handles.entries()) { g.beginPath(); g.arc(x - ox, y - oy, 4, 0, Math.PI * 2); g.fillStyle = i === ui.hot ? HOT : '#fff'; g.fill(); g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); }
   if (ui.pill) {
     const [x, y, w, h] = ui.pill;
     g.fillStyle = 'rgba(176,131,89,0.94)'; g.beginPath(); g.roundRect(x - ox, y - oy, w, h, h / 2); g.fill();
@@ -821,15 +825,30 @@ function endGrab() {
   releasedAt = performance.now();
 }
 
+// 角点 10 点以内算「角上」（缩放），角外 10 到 36 点、又不在布上算「角外」（旋转）
+function nearestCorner(sx, sy) {
+  const cs = cornersScreen();
+  let bi = 0;
+  cs.forEach(([x, y], i) => { if (Math.hypot(x - sx, y - sy) < Math.hypot(cs[bi][0] - sx, cs[bi][1] - sy)) bi = i; });
+  return bi;
+}
+function cornerZone(sx, sy) {
+  const cs = cornersScreen();
+  let best = Infinity;
+  for (const [x, y] of cs) best = Math.min(best, Math.hypot(x - sx, y - sy));
+  if (best < 10) return 'scale';
+  if (best < 36 && !pointInPoly(sx, sy, cs)) return 'rotate';
+  return null;
+}
 function beginTransform(sx, sy) {
   if (phase === 'falling') { phase = 'idle'; deformed = true; maskDirty = true; }   // 变形时布停在现在的样子
   else if (phase === 'restoring') { snapToRest(); phase = 'idle'; }
-  const cs = cornersScreen();
-  const nearCorner = cs.some(([x, y]) => Math.hypot(x - sx, y - sy) < 30);
+  // 参考视频 f1300 起：按在角点上拖是缩放；f1150 起：按在角外一圈拖是旋转；按在布上拖是移动
+  const kind = cornerZone(sx, sy) || 'move';
   const m = toWorld(sx, sy);
   tf = {
-    kind: nearCorner ? 'scale' : 'move',
-    m0: m, c0: { x: place.cx, y: place.cy }, a0: place.angle, w0: place.width,
+    kind,
+    ci: nearestCorner(sx, sy), m0: m, c0: { x: place.cx, y: place.cy }, a0: place.angle, w0: place.width,
     v0: new THREE.Vector2(m.x - place.cx, m.y - place.cy),
   };
   mode = 'transform';
@@ -852,9 +871,11 @@ function moveTransform(sx, sy) {
   if (tf.kind === 'move') {
     place.cx = tf.c0.x + (m.x - tf.m0.x);
     place.cy = tf.c0.y + (m.y - tf.m0.y);
-  } else {
+  } else if (tf.kind === 'rotate') {
     const v = new THREE.Vector2(m.x - place.cx, m.y - place.cy);
     place.angle = tf.a0 + Math.atan2(v.y, v.x) - Math.atan2(tf.v0.y, tf.v0.x);
+  } else {
+    const v = new THREE.Vector2(m.x - place.cx, m.y - place.cy);
     place.width = Math.max(200, Math.min(W * 0.9, (tf.w0 * v.length()) / Math.max(tf.v0.length(), 1)));
   }
   if (deformed) { applyPlaceDelta(before, place); computeRest(); maskDirty = true; }
@@ -867,7 +888,7 @@ let lastDownT = 0, lastDownX = 0, lastDownY = 0;
 const cv = renderer.domElement;
 cv.style.cursor = 'default';   // 参考视频里抓、拖、悬停都是普通箭头
 cv.addEventListener('pointerdown', (e) => {
-  const inside = pointInPoly(e.clientX, e.clientY, idleOutline(optionDown ? 26 : 10)) || phase !== 'idle';
+  const inside = pointInPoly(e.clientX, e.clientY, idleOutline(optionDown ? 36 : 10)) || phase !== 'idle';
   if (!inside) return;
   // 双击摊平：第二下按下时不再抓布，免得两次抓放让布抖两下
   const now = performance.now();
@@ -912,6 +933,9 @@ function flatten() {
 window.rugFlatten = flatten;
 
 // ---------- 主循环 ----------
+// 逐帧录制对比视频时用模拟时钟：每次只走 1/60 秒，和真实时间无关
+let offline = false, simNow = 0;
+const now = () => (offline ? simNow : performance.now());
 let lastT = performance.now();
 let frameCount = 0, fpsT = lastT, fps = 0;
 let running = false;
@@ -919,7 +943,7 @@ let liveUntil = 0;
 let surfaceLive = true;   // 动态材质现在是否在自己逐帧渲染
 const LIVE_MS = 4000;
 function touchLive() { liveUntil = performance.now() + LIVE_MS; wake(); }
-function wake() { needsRender = true; if (!running) { running = true; lastT = performance.now(); requestAnimationFrame(loop); } }
+function wake() { needsRender = true; if (!running && !offline) { running = true; lastT = performance.now(); requestAnimationFrame(loop); } }
 
 function loop(t) {
   const cpu0 = performance.now();
@@ -988,7 +1012,7 @@ function loop(t) {
   if (animated && (phase !== 'idle' || mode !== null || recorder || (frameCount & 1) === 0)) { surfaceTex.needsUpdate = true; needsRender = true; }
   if (recorder) needsRender = true;   // 录制时每帧都画，否则录到被清空的画布
 
-  const selAnimating = updateSel(performance.now());
+  const selAnimating = updateSel(now());
   if (selAnimating) needsRender = true;
   if (needsRender) {
     posAttr.needsUpdate = true;
@@ -1003,17 +1027,18 @@ function loop(t) {
     renderer.render(scene, camera);
     needsRender = false;
   }
-  if (snapQueue.length) {
-    // 调试截图：截地毯周围一块，底色用木地板色
+  for (const it of snapQueue.splice(0)) {
+    // 调试截图：默认截地毯周围一块、底色用木地板色；给了范围时按范围截，背景透明
     const [cx, cy] = toScreen(place.cx, place.cy, 0), dpr = renderer.getPixelRatio();
-    const rw = Math.round(Math.min(W, place.width * 1.7)), rh = Math.round(Math.min(H, place.width * 1.2));
-    const rx = Math.max(0, Math.min(W - rw, cx - rw / 2)), ry = Math.max(0, Math.min(H - rh, cy - rh / 2));
+    let rw = Math.round(Math.min(W, place.width * 1.7)), rh = Math.round(Math.min(H, place.width * 1.2));
+    let rx = Math.max(0, Math.min(W - rw, cx - rw / 2)), ry = Math.max(0, Math.min(H - rh, cy - rh / 2));
+    if (it.rect) [rx, ry, rw, rh] = it.rect;
     const out = document.createElement('canvas'); out.width = rw; out.height = rh;
     const g = out.getContext('2d');
-    g.fillStyle = '#b98f68'; g.fillRect(0, 0, rw, rh);
+    if (!it.rect) { g.fillStyle = '#b98f68'; g.fillRect(0, 0, rw, rh); }
     g.drawImage(renderer.domElement, rx * dpr, ry * dpr, rw * dpr, rh * dpr, 0, 0, rw, rh);
     drawSelUI(g, rx, ry);
-    for (const name of snapQueue.splice(0)) post({ type: 'snap', name, data: out.toDataURL('image/png').split(',')[1] });
+    post({ type: 'snap', name: it.name, data: out.toDataURL('image/png').split(',')[1] });
   }
   if (recorder) recorder.draw();
   publishHit();
@@ -1024,6 +1049,7 @@ function loop(t) {
 
   window.__cpu = (window.__cpu || 0) * 0.9 + (performance.now() - cpu0) * 0.1;
   // 静止且材质不动时停掉循环，省电
+  if (offline) return;
   if (phase === 'idle' && !animated && mode === null && !demoRunning && !selAnimating) { running = false; return; }
   requestAnimationFrame(loop);
 }
@@ -1266,8 +1292,13 @@ window.__t = {
   option: (b) => window.rugSetOption(b),
   beginTransform: (x, y) => { pointerX = x; pointerY = y; beginTransform(x, y); }, moveTransform: (x, y) => { pointerX = x; pointerY = y; moveTransform(x, y); }, endTransform,
   selNow: () => ({ ...selNow }),
+  selUI: () => selUI(), cornerZone, hover: (x, y) => { pointerX = x; pointerY = y; updateHandles(); },
   tex: (name) => post({ type: 'snap', name, data: surface.canvas.toDataURL('image/png').split(',')[1] }),
-  snap: (name) => { snapQueue.push(name); needsRender = true; wake(); },
+  snap: (name, rect) => { snapQueue.push({ name, rect }); needsRender = true; wake(); },
+  // 逐帧模式：停掉自动循环，之后每调一次 frame() 走 1/60 秒并画一帧
+  offline: () => { offline = true; simNow = performance.now(); lastT = simNow; },
+  frame: () => { simNow += 1000 / 60; loop(simNow); },
+  rugSet: (x, y, w, deg) => { const p = toWorld(x, y); place = { cx: p.x, cy: p.y, angle: (deg * Math.PI) / 180, width: w }; snapToRest(); phase = 'idle'; needsRender = true; },
   quit: () => post({ type: 'quit' }),
   state: () => ({ phase, deformed, place: { ...place } }),
   info: () => ({ grabK, target: grabTarget && grabTarget.toArray(), p: Array.from(pos.slice(grabK * 3, grabK * 3 + 3)), inv: inv[grabK] }),
