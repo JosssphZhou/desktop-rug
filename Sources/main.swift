@@ -18,6 +18,7 @@ struct Options {
     var pose: String? = nil
     var alwaysRender = false
     var testMenu = false
+    var sweep = false
     var level: Int? = nil   // 调试用：直接指定窗口层级的数值
     var reset = false
     var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
@@ -39,6 +40,7 @@ struct Options {
             case "--pose": pose = next(); alwaysRender = true
             case "--always-render": alwaysRender = true
             case "--test-menu": testMenu = true
+            case "--test-sweep": sweep = true
             case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
             case "--plain": extraQuery.append("plain=1")
@@ -120,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var webView: RugWebView!
     var statusItem: NSStatusItem!
     var hitPolygon: [CGPoint] = []      // 网页坐标（左上原点，单位为点）
+    var hitMask: (w: Int, h: Int, cell: CGFloat, bytes: [UInt8])? = nil   // 布停在叠起样子时，用网格代替轮廓
     var dragging = false
     var optionDown = false
     var timer: Timer?
@@ -164,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         webView.autoresizingMask = [.width, .height]
         // 被其他窗口挡住时 WebKit 默认暂停提交画面。演示录制时关掉这个检测，截到的才是当前画面；
         // 日常使用保留，被挡住时省电。
-        if options.demo || options.alwaysRender {
+        if options.demo || options.alwaysRender || options.sweep {
             webView.setValue(false, forKey: "windowOcclusionDetectionEnabled")
             log("已关闭遮挡检测（演示模式）")
         }
@@ -173,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         var query: [String] = ["material=\(currentMaterial)"]
         if options.demo { query.append("demo=1") }
         if options.fakeBumps { query.append("fakeBumps=1") }
+        if options.sweep { query.append("sweep=1") }
         if let r = options.rug { query.append("rug=\(r)") }
         if options.record != nil { query.append("record=1") }
         if let p = options.pose { query.append("pose=\(p)") }
@@ -226,7 +230,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let p = NSEvent.mouseLocation
         let f = window.frame
         let local = CGPoint(x: p.x - f.minX, y: f.height - (p.y - f.minY))
-        setAccept(pointInPolygon(local, hitPolygon))
+        setAccept(inHitArea(local))
+    }
+
+    func inHitArea(_ p: CGPoint) -> Bool {
+        if let m = hitMask {
+            let cx = Int(p.x / m.cell), cy = Int(p.y / m.cell)
+            guard cx >= 0, cy >= 0, cx < m.w, cy < m.h else { return false }
+            return m.bytes[cy * m.w + cx] != 0
+        }
+        return pointInPolygon(p, hitPolygon)
     }
 
     func setAccept(_ accept: Bool) {
@@ -286,7 +299,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 var i = 0
                 while i + 1 < flat.count { pts.append(CGPoint(x: flat[i], y: flat[i + 1])); i += 2 }
                 hitPolygon = pts
+                hitMask = nil
             }
+        case "hitMask":
+            if let w = body["w"] as? Int, let h = body["h"] as? Int, let cell = body["cell"] as? Double,
+               let b64 = body["data"] as? String, let data = Data(base64Encoded: b64), data.count == w * h {
+                hitMask = (w, h, CGFloat(cell), [UInt8](data))
+            }
+        case "probe":
+            // 测试：网页给出几个屏幕点和期望，用宿主真正使用的判断函数核对
+            if let pts = body["pts"] as? [[Any]] {
+                for q in pts {
+                    guard q.count == 4, let name = q[0] as? String, let x = (q[1] as? NSNumber)?.doubleValue, let y = (q[2] as? NSNumber)?.doubleValue, let e = (q[3] as? NSNumber)?.intValue else { continue }
+                    let got = inHitArea(CGPoint(x: x, y: y))
+                    log("宿主点击判断 \(name) (\(Int(x)),\(Int(y)))：\(got ? "接收鼠标" : "穿透") \(got == (e == 1) ? "通过" : "不通过")")
+                }
+            }
+        case "sweepDone":
+            if options.sweep { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) } }
         case "drag":
             dragging = (body["active"] as? Bool) ?? false
         case "material":

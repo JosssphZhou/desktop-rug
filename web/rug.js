@@ -527,8 +527,43 @@ function deformedHull(pad = 10) {
   const cx = h.reduce((a, p) => a + p[0], 0) / h.length, cy = h.reduce((a, p) => a + p[1], 0) / h.length;
   return h.map(([x, y]) => { const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy) || 1; return [x + (dx / d) * pad, y + (dy / d) * pad]; });
 }
+// 点击穿透用的网格：只有贴着桌面的三角形算「地毯在这里」。掀起离地的部分、地毯移开后露出来的桌面都放行，
+// 这样掀开一角后，文件可以从掀起的那块布下面拖进去
+const MASK_CELL = 12, GROUND_EPS = 7;
+let maskDirty = false;
+function postMask() {
+  const mw = Math.ceil(W / MASK_CELL), mh = Math.ceil(H / MASK_CELL);
+  updateFloor();
+  const sp = new Float32Array(N * 2);
+  const gr = new Uint8Array(N);
+  for (let k = 0; k < N; k++) {
+    const [x, y] = toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
+    sp[k * 2] = x / MASK_CELL; sp[k * 2 + 1] = y / MASK_CELL;
+    gr[k] = pos[k * 3 + 2] - floorZ[k] < GROUND_EPS ? 1 : 0;
+  }
+  const bytes = new Uint8Array(mw * mh);
+  let on = 0;
+  // 每个贴地的三角形把它外接矩形盖到的格子都标上，三角形只有几个像素大，不用再画轮廓
+  for (let t = 0; t < tri.length; t += 3) {
+    const a = tri[t], b = tri[t + 1], c = tri[t + 2];
+    if (!(gr[a] && gr[b] && gr[c])) continue;
+    const x0 = Math.max(0, Math.floor(Math.min(sp[a * 2], sp[b * 2], sp[c * 2]))), x1 = Math.min(mw - 1, Math.floor(Math.max(sp[a * 2], sp[b * 2], sp[c * 2])));
+    const y0 = Math.max(0, Math.floor(Math.min(sp[a * 2 + 1], sp[b * 2 + 1], sp[c * 2 + 1]))), y1 = Math.min(mh - 1, Math.floor(Math.max(sp[a * 2 + 1], sp[b * 2 + 1], sp[c * 2 + 1])));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * mw + x; if (!bytes[i]) { bytes[i] = 1; on++; } }
+  }
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  window.__mask = { w: mw, h: mh, cell: MASK_CELL, bytes };
+  post({ type: 'hitMask', w: mw, h: mh, cell: MASK_CELL, data: btoa(bin) });
+  console.log('点击范围网格', mw + 'x' + mh, '贴地格数', on);
+}
 function idleOutline(pad) { return deformed ? deformedHull(pad) : cornersScreen(pad); }
 function publishHit() {
+  if (phase === 'idle' && deformed) {
+    // 布停在叠起的样子：只让贴着桌面的部分接收鼠标，其余穿透
+    if (maskDirty) { maskDirty = false; lastHit = 'mask'; postMask(); }
+    return;
+  }
   let flat = [];
   if (phase === 'idle') {
     // 静止时用四个角，按 Option 时往外扩一点把角上的控制点也算进去；流苏也算在地毯里
@@ -707,7 +742,7 @@ function loop(t) {
           const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
           if (d > maxD) maxD = d;
         }
-        if (maxD < 3) snapToRest(); else deformed = true;   // 几乎还是平的就吸附回去，免得留下看不出来的歪斜
+        if (maxD < 3) snapToRest(); else { deformed = true; maskDirty = true; }   // 几乎还是平的就吸附回去，免得留下看不出来的歪斜
         phase = 'idle';
         console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', deformed ? '停在掀起的样子' : '平整');
       }
@@ -868,6 +903,43 @@ window.rugDemo = async () => {
   }
 };
 
+
+// ---------- 测试：掀起一角叠过去，检查点击穿透网格 ----------
+// 原先地毯盖着的角落，布掀走之后必须穿透（文件才能拖进去）；叠在上面的那块和没动的底布必须接收鼠标。
+window.rugTestSweep = async () => {
+  demoRunning = true; wake();
+  await sleep(500);
+  let cs = cornersScreen();
+  const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const exposed = lerp(cs[2], cs[0], 0.06);       // 右下角往里一点：布被掀走后这里露出桌面
+  const base = lerp(cs[0], cs[2], 0.12);          // 左上角往里一点：没动的底布
+  beginGrab(cs[2][0] - 3, cs[2][1] - 3);
+  await glide(cs[2], lerp(cs[2], cs[0], 0.62), 1300, moveGrab);
+  await sleep(400);
+  const lifting = lerp(cs[2], cs[0], 0.62);
+  endGrab();
+  await waitIdle(6000);
+  await sleep(300);
+  const tip = toScreen(pos[idx(NX, NY) * 3], pos[idx(NX, NY) * 3 + 1], pos[idx(NX, NY) * 3 + 2]);   // 被抓的角现在躺在哪里
+  const m = window.__mask;
+  const at = (p) => (m && m.bytes[Math.floor(p[1] / m.cell) * m.w + Math.floor(p[0] / m.cell)]) ? 1 : 0;
+  const probes = [['露出的桌面（原右下角内侧）', exposed, 0], ['没动的底布（左上角内侧）', base, 1], ['叠在上面的布角', tip, 1]];
+  for (const [name, p, expect] of probes) console.log('网格自检', name, '屏幕', Math.round(p[0]) + ',' + Math.round(p[1]), '接收鼠标=' + at(p), at(p) === expect ? '通过' : '不通过');
+  post({ type: 'probe', pts: probes.map(([n, p, e]) => [n, p[0], p[1], e]) });
+  // 网格的字符图：# 接收鼠标，. 穿透（每 3 格取一格）
+  if (m) {
+    const [x0, y0] = [Math.floor(Math.min(cs[0][0], cs[2][0]) / m.cell) - 2, Math.floor(Math.min(cs[0][1], cs[2][1]) / m.cell) - 2];
+    const [x1, y1] = [Math.ceil(Math.max(cs[0][0], cs[2][0]) / m.cell) + 2, Math.ceil(Math.max(cs[0][1], cs[2][1]) / m.cell) + 2];
+    const rows = [];
+    for (let y = y0; y <= y1; y += 2) { let r = ''; for (let x = x0; x <= x1; x++) r += m.bytes[y * m.w + x] ? '#' : '.'; rows.push(r); }
+    console.log('网格图\n' + rows.join('\n'));
+  }
+  await sleep(500);
+  flatten(); await sleep(300); await waitIdle();
+  demoRunning = false;
+  post({ type: 'sweepDone' });
+};
+if (params.get('sweep')) setTimeout(() => window.rugTestSweep(), 800);
 
 // ---------- 网页内录制：把地毯周围一块画面录成视频，只含地毯，不经过屏幕截图 ----------
 let recorder = null;
