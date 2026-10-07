@@ -44,6 +44,7 @@ struct Options {
             case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
             case "--plain": extraQuery.append("plain=1")
+            case "--debug": extraQuery.append("debug=1")
             default: break
             }
             i += 1

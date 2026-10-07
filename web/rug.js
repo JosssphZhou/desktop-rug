@@ -561,7 +561,7 @@ function postMask() {
 }
 function idleOutline(pad) { return deformed ? deformedHull(pad) : cornersScreen(pad); }
 function publishHit() {
-  if (phase === 'idle' && deformed) {
+  if (phase === 'idle' && deformed && !optionDown) {
     // 布停在叠起的样子：只让贴着桌面的部分接收鼠标，其余穿透
     if (maskDirty) { maskDirty = false; lastHit = 'mask'; postMask(); }
     return;
@@ -672,11 +672,17 @@ function moveTransform(sx, sy) {
 }
 function endTransform() { mode = null; tf = null; savePlace(); }
 
+let lastDownT = 0, lastDownX = 0, lastDownY = 0;
 const cv = renderer.domElement;
 cv.style.cursor = 'grab';
 cv.addEventListener('pointerdown', (e) => {
   const inside = pointInPoly(e.clientX, e.clientY, idleOutline(optionDown ? 26 : 10)) || phase !== 'idle';
   if (!inside) return;
+  // 双击摊平：第二下按下时不再抓布，免得两次抓放让布抖两下
+  const now = performance.now();
+  const isSecondClick = now - lastDownT < 300 && Math.hypot(e.clientX - lastDownX, e.clientY - lastDownY) < 8 && !(e.altKey || optionDown);
+  lastDownT = now; lastDownX = e.clientX; lastDownY = e.clientY;
+  if (isSecondClick) return;
   cv.setPointerCapture(e.pointerId);
   post({ type: 'drag', active: true });
   if (e.altKey || optionDown) beginTransform(e.clientX, e.clientY);
@@ -732,7 +738,9 @@ function loop(t) {
     for (let s = 0; s < SUB; s++) step(dtFrame / SUB, restoreK);
     // 用上一帧的法线判断哪些点翻过去了
     const nrm = geo.attributes.normal.array;
-    for (let k = 0; k < N; k++) flipped[k] = nrm[k * 3 + 2] < -0.15 ? 1 : 0;
+    let flips = 0;
+    for (let k = 0; k < N; k++) { const f = nrm[k * 3 + 2] < -0.15 ? 1 : 0; if (f !== flipped[k]) flips++; flipped[k] = f; }
+    window.__flips = flips;
     if (phase === 'falling') {
       // 松手后只受重力：最快的点几乎不动了就算停稳，布留在落下来的样子
       let vmax = 0;
@@ -742,7 +750,8 @@ function loop(t) {
         const v = Math.abs(pos[o] - prev[o]) + Math.abs(pos[o + 1] - prev[o + 1]) + Math.abs(pos[o + 2] - prev[o + 2]);
         if (v > vmax) vmax = v;
       }
-      calmFrames = vmax < 0.25 * (dtFrame * 60) ? calmFrames + 1 : 0;
+      if (params.get('debug') && (frameCount % 10) === 0) console.log('落下', phaseT.toFixed(2), 'vmax', vmax.toFixed(3), '翻面变化点数', window.__flips);
+      calmFrames = vmax < 0.6 * (dtFrame * 60) ? calmFrames + 1 : 0;
       if ((calmFrames > 6 && phaseT > 0.25) || phaseT > 3) {
         let maxD = 0;
         for (let k = 0; k < N; k++) {
@@ -801,7 +810,8 @@ function loop(t) {
 }
 
 // ---------- 宿主调用的接口 ----------
-window.rugSetOption = (b) => { optionDown = b; needsRender = true; publishHit(); updateHandles(); };
+window.rugSetOption = (b) => { optionDown = b; if (!b && deformed) maskDirty = true;   // 按着 Option 时控制点在四角，范围临时改回外形，松开再用网格
+  needsRender = true; publishHit(); updateHandles(); };
 window.rugSetMaterial = (id) => { setMaterial(id); touchLive(); };
 window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };   // 放回屏幕中间，同时摊平
 window.rugSetIcons = (list) => {
