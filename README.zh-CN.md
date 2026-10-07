@@ -41,7 +41,7 @@
 ## 安装
 
 1. 在 [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest) 下载 **DesktopRug-0.1.1.zip**。
-2. 解压，把 **桌面地毯.app** 拖进「应用程序」。
+2. 解压，把 **Desktop Rug.app** 拖进「应用程序」。中文系统里它显示为「桌面地毯」。
 3. 打开。它只在菜单栏出现，不在程序坞里。
 
 ## 可选：在图标上鼓起来
@@ -53,7 +53,7 @@
 ```sh
 npm install
 scripts/make-app.sh
-open build/桌面地毯.app
+open "build/Desktop Rug.app"
 ```
 
 ## 我的另一个作品

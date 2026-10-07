@@ -1,0 +1,15 @@
+/* 菜单栏 */
+"app.name" = "桌面地毯";
+"menu.pattern" = "地毯花样";
+"menu.flatten" = "把地毯放平";
+"menu.center" = "地毯放回屏幕中间";
+"menu.demo" = "照参考视频演示一遍";
+"menu.icons" = "读取桌面图标位置，让地毯鼓起来";
+"menu.quit" = "退出桌面地毯";
+
+/* 花样 */
+"material.persian" = "波斯纹样";
+"material.warp" = "条纹流动（Paper Warp）";
+"material.grain" = "颗粒渐变（Paper Grain Gradient）";
+"material.mesh" = "丝绸渐变（Paper Mesh Gradient）";
+"material.dots" = "菱格织纹（Paper Dot Grid）";

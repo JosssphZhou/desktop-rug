@@ -24,6 +24,7 @@ struct Options {
     var level: Int? = nil   // 调试用：直接指定窗口层级的数值
     var reset = false
     var dumpWindows = false   // 诊断：只读列出屏幕上所有窗口的所有者、层级和编号，然后退出
+    var showMenu = false   // 验证用：启动后自动展开菜单栏菜单，方便截图
     var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
     init(_ args: [String]) {
@@ -49,6 +50,7 @@ struct Options {
             case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
             case "--dump-windows": dumpWindows = true
+            case "--show-menu": showMenu = true
             case "--plain": extraQuery.append("plain=1")
             case "--debug": extraQuery.append("debug=1")
             case "--q": if let kv = next() { extraQuery.append(kv) }   // 调试：直接给网页加一个查询参数，如 --q fric=0.02
@@ -116,13 +118,19 @@ final class RugWindow: NSWindow {
 
 // MARK: - 应用
 
+// 界面文字按系统首选语言从 en.lproj 或 zh-Hans.lproj 的 Localizable.strings 里取；
+// 没打包成 .app 直接跑可执行文件时找不到语言包，用这里写的英文
+func L(_ key: String, _ english: String) -> String { NSLocalizedString(key, value: english, comment: "") }
+// 系统按首选语言和应用自带的语言包选出来的界面语言，传给网页，网页里的文字跟着它
+let uiLanguage = Bundle.main.preferredLocalizations.first ?? "en"
+
 struct Material { let id: String; let name: String }
 let materials: [Material] = [
-    Material(id: "persian", name: "波斯纹样"),
-    Material(id: "warp", name: "条纹流动（Paper Warp）"),
-    Material(id: "grain", name: "颗粒渐变（Paper Grain Gradient）"),
-    Material(id: "mesh", name: "丝绸渐变（Paper Mesh Gradient）"),
-    Material(id: "dots", name: "菱格织纹（Paper Dot Grid）"),
+    Material(id: "persian", name: L("material.persian", "Persian")),
+    Material(id: "warp", name: L("material.warp", "Flowing Stripes")),
+    Material(id: "grain", name: L("material.grain", "Grain Gradient")),
+    Material(id: "mesh", name: L("material.mesh", "Silk Gradient")),
+    Material(id: "dots", name: L("material.dots", "Dot Grid")),
 ]
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
@@ -181,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         window.contentView = webView
 
-        var query: [String] = ["material=\(currentMaterial)"]
+        var query: [String] = ["material=\(currentMaterial)", "lang=\(uiLanguage)"]
         if options.demo { query.append("demo=1") }
         if options.fakeBumps { query.append("fakeBumps=1") }
         if options.sweep { query.append("sweep=1") }
@@ -360,11 +368,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "rectangle.checkered", accessibilityDescription: "桌面地毯")
-                ?? NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "桌面地毯")
+            let name = L("app.name", "Desktop Rug")
+            button.image = NSImage(systemSymbolName: "rectangle.checkered", accessibilityDescription: name)
+                ?? NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: name)
         }
         let menu = NSMenu()
-        let header = NSMenuItem(title: "地毯花样", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: L("menu.pattern", "Pattern"), action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         for m in materials {
@@ -376,23 +385,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             materialItems.append(item)
         }
         menu.addItem(.separator())
-        let flat = NSMenuItem(title: "把地毯放平", action: #selector(flattenRug), keyEquivalent: "")
+        let flat = NSMenuItem(title: L("menu.flatten", "Flatten Rug"), action: #selector(flattenRug), keyEquivalent: "")
         flat.target = self
         menu.addItem(flat)
-        let reset = NSMenuItem(title: "地毯放回屏幕中间", action: #selector(resetRug), keyEquivalent: "")
+        let reset = NSMenuItem(title: L("menu.center", "Move Rug to Center"), action: #selector(resetRug), keyEquivalent: "")
         reset.target = self
         menu.addItem(reset)
-        let demo = NSMenuItem(title: "照参考视频演示一遍", action: #selector(runDemo), keyEquivalent: "")
+        // 演示是照中文参考视频做的，只在中文界面里出现
+        let demo = NSMenuItem(title: L("menu.demo", "Play Demo"), action: #selector(runDemo), keyEquivalent: "")
         demo.target = self
+        demo.isHidden = !uiLanguage.hasPrefix("zh")
         menu.addItem(demo)
-        let icons = NSMenuItem(title: "读取桌面图标位置，让地毯鼓起来", action: #selector(readDesktopIcons), keyEquivalent: "")
+        let icons = NSMenuItem(title: L("menu.icons", "Read Desktop Icon Positions"), action: #selector(readDesktopIcons), keyEquivalent: "")
         icons.target = self
         menu.addItem(icons)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "退出桌面地毯", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: L("menu.quit", "Quit Desktop Rug"), action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
         statusItem.menu = menu
+        if options.showMenu {
+            // 菜单栏可能自动隐藏，直接在屏幕中间弹出同一个菜单。截图按窗口编号只截菜单本身
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let f = NSScreen.screens[0].frame
+                NSApp.activate(ignoringOtherApps: true)   // 菜单栏应用不在前台时弹出菜单可能不显示
+                menu.popUp(positioning: nil, at: NSPoint(x: f.midX, y: f.midY), in: nil)
+            }
+        }
     }
 
     func markMaterial(_ id: String) {

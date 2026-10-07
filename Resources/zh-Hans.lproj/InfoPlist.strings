@@ -1,0 +1,3 @@
+"CFBundleName" = "桌面地毯";
+"CFBundleDisplayName" = "桌面地毯";
+"NSAppleEventsUsageDescription" = "读取桌面图标的位置，让地毯在图标上鼓起来。只读位置，不移动、不打开任何文件。";

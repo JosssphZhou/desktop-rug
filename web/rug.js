@@ -782,7 +782,10 @@ Object.assign(pill.style, {
   background: 'rgba(176,131,89,0.94)', boxShadow: 'inset 0 0 0 1px rgba(255,236,210,0.18), 0 1px 3px rgba(60,35,15,0.18)',
   color: 'rgba(250,226,192,0.95)', font: '600 13px -apple-system, "PingFang SC", sans-serif', alignItems: 'center', userSelect: 'none', cursor: 'default',
 });
-pill.innerHTML = `<div data-act="design" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:100%">${ICON_SWATCH}<span>花样</span></div>`
+// 界面语言由宿主按系统首选语言传进来（lang=zh-Hans 或 en），没传时用英文
+const ZH = (params.get('lang') || '').startsWith('zh');
+const T_PATTERN = ZH ? '花样' : 'Pattern';
+pill.innerHTML = `<div data-act="design" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:100%">${ICON_SWATCH}<span>${T_PATTERN}</span></div>`
   + '<div style="width:1px;height:18px;background:rgba(250,226,192,0.28)"></div>'
   + `<div data-act="trash" style="width:42px;display:flex;align-items:center;justify-content:center;height:100%">${ICON_TRASH}</div>`;
 document.body.appendChild(pill);
@@ -833,7 +836,7 @@ function drawSelUI(g, ox, oy) {
     const [x, y, w, h] = ui.pill;
     g.fillStyle = 'rgba(176,131,89,0.94)'; g.beginPath(); g.roundRect(x - ox, y - oy, w, h, h / 2); g.fill();
     g.fillStyle = 'rgba(250,226,192,0.95)'; g.font = '600 13px -apple-system, "PingFang SC"'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText('▱ 花样', x - ox + (w - 43) / 2, y - oy + h / 2); g.fillText('🗑', x - ox + w - 21, y - oy + h / 2);
+    g.fillText('▱ ' + T_PATTERN, x - ox + (w - 43) / 2, y - oy + h / 2); g.fillText('🗑', x - ox + w - 21, y - oy + h / 2);
     g.fillStyle = 'rgba(250,226,192,0.28)'; g.fillRect(x - ox + w - 43, y - oy + 9, 1, h - 18);
   }
   if (ui.bubble) {

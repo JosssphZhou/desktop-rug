@@ -41,19 +41,19 @@ Clicks outside the rug go straight through to your desktop.
 ## Install
 
 1. Download **DesktopRug-0.1.1.zip** from [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest).
-2. Unzip it and drag **桌面地毯.app** into Applications.
+2. Unzip it and drag **Desktop Rug.app** into Applications.
 3. Open it. The app lives in the menu bar, not the Dock.
 
 ## Optional: bulge over icons
 
-**Read desktop icon positions** in the menu makes the rug bulge where your icons are. macOS will ask for Automation access. The app only reads icon positions. It never moves or opens a file.
+**Read Desktop Icon Positions** in the menu makes the rug bulge where your icons are. macOS will ask for Automation access. The app only reads icon positions. It never moves or opens a file.
 
 ## Build from source
 
 ```sh
 npm install
 scripts/make-app.sh
-open build/桌面地毯.app
+open "build/Desktop Rug.app"
 ```
 
 ## Also by me

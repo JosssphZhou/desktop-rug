@@ -1,0 +1,15 @@
+/* Menu bar */
+"app.name" = "Desktop Rug";
+"menu.pattern" = "Pattern";
+"menu.flatten" = "Flatten Rug";
+"menu.center" = "Move Rug to Center";
+"menu.demo" = "Play Demo";
+"menu.icons" = "Read Desktop Icon Positions";
+"menu.quit" = "Quit Desktop Rug";
+
+/* Patterns */
+"material.persian" = "Persian";
+"material.warp" = "Flowing Stripes";
+"material.grain" = "Grain Gradient";
+"material.mesh" = "Silk Gradient";
+"material.dots" = "Dot Grid";

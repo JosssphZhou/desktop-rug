@@ -1,0 +1,3 @@
+"CFBundleName" = "Desktop Rug";
+"CFBundleDisplayName" = "Desktop Rug";
+"NSAppleEventsUsageDescription" = "Reads where your desktop icons are so the rug can bulge over them. It only reads positions and never moves or opens a file.";
