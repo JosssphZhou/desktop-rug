@@ -233,8 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let f = window.frame
         let local = CGPoint(x: p.x - f.minX, y: f.height - (p.y - f.minY))
         // 按住 Option 且鼠标在地毯上时选中地毯；在别的应用里按 Option 不会惊动地毯
-        // 跑测试脚本（--eval-file）时不读真键盘：老板在别的应用里按 Option、鼠标又正好经过测试窗口，会把测试里的地毯选中
-        let opt = options.evalFile == nil && NSEvent.modifierFlags.contains(.option)
+        let opt = NSEvent.modifierFlags.contains(.option)
         let want = opt && (optionDown || dragging || inHitArea(local))
         if want != optionDown {
             optionDown = want

@@ -113,10 +113,6 @@ const local = new Float32Array(N * 2);   // 以地毯宽度为 1 的局部坐标
 const inv = new Float32Array(N).fill(1);
 const floorZ = new Float32Array(N);
 const flipped = new Uint8Array(N);
-// 对折和帐篷的形状手势（见下文「对折和帐篷」一节）
-let kin = null;        // 进行中的形状手势
-let lastFold = null;   // 上一次停下来的折叠，抓在翻过去的那片上可以接着折或者展开
-const kinMoved = new Uint8Array(N);   // 1 表示这个点在折叠里被移动过（翻过去的片或被拖着叠上去的一侧）
 
 for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
   const k = idx(i, j);
@@ -250,7 +246,6 @@ function snapToRest() {
     flipped[k] = 0;
   }
   deformed = false;
-  kin = null; lastFold = null;
 }
 let deformed = false;   // 松手后布停在掀起或叠起的样子，不再自动摊平
 snapToRest();
@@ -285,7 +280,6 @@ function coverFrac() {
   return coverSet.size / N;
 }
 function step(dt, restoreK, curlK = 0, extraDamp = 1) {
-  lastFold = null;   // 模拟动过的布不再是一次干净的折叠，不能接着折
   const g = GRAVITY * dt * dt;
   const damp = Math.pow(restoreK > 0 ? 0.9 : DAMP, dt * 120) * (extraDamp < 1 ? Math.pow(extraDamp, dt * 120) : 1);   // 以 120 Hz 子步为基准，和帧率无关
   for (let k = 0; k < N; k++) {
@@ -860,16 +854,13 @@ function pointInPoly(x, y, pts) {
 }
 
 function beginGrab(sx, sy) {
-  if (kin && kin.releasing) kinStop();
-  // 选离鼠标最近、位置最高的那个点（翻折时抓上面那层）。布叠着时更偏向上层：叠层只差几个点高，
-  // 不加大权重会抓到压在下面的那层
-  const topBias = deformed ? 3 : 0.4;
+  // 选离鼠标最近、位置最高的那个点（翻折时抓上面那层）
   let best = -1, bestScore = Infinity;
   for (let k = 0; k < N; k++) {
     const [x, y] = toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
     const d = Math.hypot(x - sx, y - sy);
     if (d > 40) continue;
-    const score = d - pos[k * 3 + 2] * topBias;
+    const score = d - pos[k * 3 + 2] * 0.4;
     if (score < bestScore) { bestScore = score; best = k; }
   }
   if (best < 0) return false;
@@ -887,11 +878,6 @@ function beginGrab(sx, sy) {
   grabTarget = new THREE.Vector3(pos[best * 3], pos[best * 3 + 1], pos[best * 3 + 2]);
   grabZ0 = pos[best * 3 + 2];   // 抓到的那一刻布离桌面多高，鼠标没动之前不再抬
   grabSX = sx; grabSY = sy; grabMoveT = now();
-  kin = null;
-  if (KIN && phase === 'idle') {
-    if (deformed && lastFold && kinMoved[best]) kinContinue(best, sx, sy);
-    else if (!deformed) { const p0 = screenToPlane(sx, sy, 0); if (p0) kin = { pending: true, g: best, x0: p0.x, y0: p0.y }; }
-  }
   phase = 'drag';
   mode = 'cloth';
   moveGrab(sx, sy);
@@ -901,14 +887,6 @@ function beginGrab(sx, sy) {
 let grabSX = 0, grabSY = 0, grabZFull = 0, grabMoveT = 0;
 function moveGrab(sx, sy) {
   if (grabK < 0 || !grabStart) return;
-  if (kin && kin.pending) kinMove(sx, sy);   // 还没定是不是对折时照常模拟拖动，定下来以后才换成形状逻辑
-  if (kin && !kin.pending) {
-    const move = Math.hypot(sx - grabSX, sy - grabSY);
-    if (move > 0.5) grabMoveT = now();
-    grabSX = sx; grabSY = sy;
-    kinMove(sx, sy);
-    return;
-  }
   const dist = Math.hypot(sx - grabStart[0], sy - grabStart[1]);
   // 6 点死区：鼠标还没明显移动时布不抬；之后每移动 1 点抬 0.16 点，最多抬到毯宽的 10%
   const tent = middleGrab ? TENT : 0;
@@ -937,8 +915,6 @@ function holdGrab() {
   if (p) grabTarget.copy(p);
 }
 function endGrab() {
-  if (kin && !kin.pending) { kinRelease(); return; }
-  kin = null;
   if (GRAB_WEIGHT !== 1) inv.fill(1);
   else if (grabK >= 0) inv[grabK] = 1;
   grabK = -1; grabTarget = null;
@@ -946,181 +922,6 @@ function endGrab() {
   phase = 'falling'; phaseT = 0; calmMs = 0;
   mode = null;
   releasedAt = performance.now();
-}
-
-// ---------- 对折和帐篷：照参考视频直接写出形状，不交给布料模拟 ----------
-// 对折（参考 f0236 到 f0300）：抓角或边往地毯里拖，折痕是抓点原位和光标连线的垂直平分线，
-// 抓点那一侧整片镜像翻过去、背面朝上平躺在上面。抬起时折痕处卷成半径为抬高一半的圆筒，光标停住后放平。
-// 抓地毯中间仍由布料模拟处理（帐篷形状在后续提交里写）。
-// 往外拉（前面没有布可以折）时交回布料模拟，拖边的手感不变。
-const KIN = params.get('kin') !== '0';
-// 折痕处的最小圆角半径：参考里折痕是尖的，圆角只有几个点。至少让圆筒跨过一格网格，否则斜着穿过网格的折痕会画成锯齿
-const kinRmin = () => Math.max(LAYER() / 2, (0.9 * place.width) / NX / Math.PI);
-
-// 对折：圆筒半径 R 时抓点（t = c）落在光标处，解出折痕位置 c
-function foldCrease(D, R) {
-  if (D >= Math.PI * R) return (D + Math.PI * R) / 2;
-  let lo = 0, hi = Math.PI * R;
-  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (m - R * Math.sin(m / R) < D) lo = m; else hi = m; }
-  return (lo + hi) / 2;
-}
-// 按当前手势参数摆出全部点的位置
-function kinApply() {
-  const L = LAYER(), Gx = rest[kin.g * 2], Gy = rest[kin.g * 2 + 1];
-  let ux, uy, D, Tx = 0, Ty = 0;
-  if (!kin.cont) {
-    D = Math.hypot(kin.Vx, kin.Vy);
-    if (D < 1e-6) { ux = 1; uy = 0; D = 0; } else { ux = kin.Vx / D; uy = kin.Vy / D; }
-  } else {
-    // 抓着翻过去的那片往回拉（展开）：折叠方向固定，横向的拖动让整块平移
-    ux = kin.ux; uy = kin.uy;
-    D = Math.max(kin.Vx * ux + kin.Vy * uy, 0);
-    Tx = kin.Vx - D * ux; Ty = kin.Vy - D * uy;   // 垂直于折叠方向的拖动，整块平移
-  }
-  const h = kin.h;
-  let ahead = 0;
-  {
-    const R = Math.max(h / 2, kinRmin()), c = D > 0 ? foldCrease(D, R) : 0, PR = Math.PI * R;
-    for (let k = 0; k < N; k++) {
-      const X = rest[k * 2], Y = rest[k * 2 + 1], s = (X - Gx) * ux + (Y - Gy) * uy, t = c - s;
-      let q = s, z = 0;
-      if (t > 0 && D > 0) {
-        if (t < PR) { q = c - R * Math.sin(t / R); z = R * (1 - Math.cos(t / R)); }
-        else { q = c + (t - PR); z = 2 * R; }
-        kinMoved[k] = 1; flipped[k] = t > PR / 2 ? 1 : 0;
-      } else { kinMoved[k] = 0; flipped[k] = 0; ahead++; }
-      const x = X + (q - s) * ux, y = Y + (q - s) * uy;
-      pos[k * 3] = x; pos[k * 3 + 1] = y; pos[k * 3 + 2] = z + bumpAt(x, y);
-    }
-  }
-  prev.set(pos);
-  kin.ahead = ahead; kin.D = D; kin.Tx = Tx; kin.Ty = Ty;
-  needsRender = true;
-}
-// 光标停住 30 毫秒后抬高量按 70 毫秒的时间常数降到零（参考 f0276 光标停下，f0282 折过去的那片已经平躺）
-function kinHeight() {
-  const still = now() - grabMoveT;
-  return kin.hFull * (still < 30 ? 1 : Math.exp(-(still - 30) / 70));
-}
-// 抓下去以后第一次明显移动时决定这次手势是对折、帐篷还是交给布料模拟
-function kinDecide(Vx, Vy, log) {
-  const D = Math.hypot(Vx, Vy), ux = Vx / D, uy = Vy / D, Gx = rest[grabK * 2], Gy = rest[grabK * 2 + 1];
-  if (middleGrab) return null;   // 抓中间暂时仍交给布料模拟
-  let behind = 0, ahead = 0;
-  for (let k = 0; k < N; k++) {
-    const s = (rest[k * 2] - Gx) * ux + (rest[k * 2 + 1] - Gy) * uy;
-    if (-s > behind) behind = -s;
-    if (s >= D / 2) ahead++;
-  }
-  // 抓点后面还拖着一大块布（沿着边拉）或者前面没有布（往外拉），都不是对折
-  const fold = !(behind > place.width * 0.2 || ahead < N * 0.03);
-  if (fold || log) console.log('手势判定', fold ? '对折' : '交给布料模拟', '抓点后面的布', Math.round(behind), '前面的点数', ahead, '方向', ux.toFixed(2), uy.toFixed(2), '抓点', Math.round(Gx), Math.round(Gy));
-  return fold ? { mode: 'fold' } : null;
-}
-// 光标位置换算到抓点所在高度的平面上
-function kinCursor(sx, sy) {
-  return screenToPlane(sx, sy, kin && !kin.pending ? pos[grabK * 3 + 2] : 0);
-}
-function kinMove(sx, sy) {
-  const p = kinCursor(sx, sy);
-  if (!p) return;
-  const dist = Math.hypot(sx - grabStart[0], sy - grabStart[1]);
-  if (kin.pending) {
-    if (dist < 8) return;
-    // 方向按光标从按下处走过的方向算，不按抓到的网格点算：网格点离光标有几个点的偏差，起步时会把方向带歪
-    // 判成往外拉要多走一段（16 点）再定：起步时手会抖，开头几个点的方向不可靠。这段时间布照常模拟
-    const d = kinDecide(p.x - kin.x0, p.y - kin.y0, dist >= 16);
-    if (!d) { if (dist >= 16) kin = null; return; }
-    Object.assign(kin, d, { pending: false, V0x: 0, V0y: 0, Dmax: 0 });
-    inv[grabK] = 1;
-  }
-  // 抬高：每移动 1 点抬 0.16 点，最多毯宽的 10%
-  kin.hFull = Math.min(Math.max(dist - 6, 0) * 0.16, place.width * 0.1);
-  kin.h = kinHeight();
-  // 抓到的点和光标保持按下时的相对位置
-  kin.Vx = kin.V0x + (p.x - kin.x0); kin.Vy = kin.V0y + (p.y - kin.y0);
-  kinApply();
-  kin.Dmax = Math.max(kin.Dmax, kin.D);
-  // 往外拉、前面没有布可以折了，或者往回拉到几乎摊平：交给布料模拟，整块跟着走
-  let toSim = kin.ahead < N * 0.03 || (kin.D < place.width * 0.02 && kin.Dmax > place.width * 0.04);
-  // 抓着翻过去的那片往回拉：展开到只剩毯宽 3% 就算展开完了，之后整块跟着光标走（参考 f0444 到 f0466）
-  if (kin.cont) toSim ||= kin.D < place.width * 0.03;
-  if (toSim) kinToSim(sx, sy);
-}
-// 交给原来的布料拖动：从现在的样子接着模拟，抓点从这里重新算死区
-function kinToSim(sx, sy) {
-  if (kin && !kin.pending) {
-    console.log('对折交给布料模拟', 'D', Math.round(kin.D), '前面的点数', kin.ahead);
-    if (kin.Tx || kin.Ty) { place.cx += kin.Tx; place.cy += kin.Ty; computeRest(); }   // 展开时的平移并进摆放
-  }
-  kin = null; lastFold = null;
-  prev.set(pos);
-  inv[grabK] = 0;
-  grabStart = [sx, sy];
-  grabZ0 = pos[grabK * 3 + 2];
-  grabTarget = new THREE.Vector3(pos[grabK * 3], pos[grabK * 3 + 1], pos[grabK * 3 + 2]);
-  moveGrab(sx, sy);
-}
-// 抓在上一次折叠翻过去（或叠上去）的那片上：接着那次折叠做，往回拉就展开
-function kinContinue(k, sx, sy) {
-  const p = screenToPlane(sx, sy, pos[k * 3 + 2]);
-  if (!p) return false;
-  // 以抓到的这个点为抓点重新描述同一次折叠（平躺的翻折片上任一点和它的原位，垂直平分线就是原来的折痕）
-  const Vx = pos[k * 3] - rest[k * 2], Vy = pos[k * 3 + 1] - rest[k * 2 + 1], D = Math.hypot(Vx, Vy) || 1;
-  kin = { mode: 'fold', g: k, V0x: Vx, V0y: Vy, ux: Vx / D, uy: Vy / D };
-  Object.assign(kin, { pending: false, cont: true, x0: p.x, y0: p.y, hFull: 0, h: 0, Vx: kin.V0x, Vy: kin.V0y });
-  kin.Dmax = Math.hypot(kin.V0x, kin.V0y);
-  return true;
-}
-// 松手：抬高量在几帧内落到零就停住，不回弹；只剩一个小翘角时慢慢放平（参考 f0516 到 f0564，时间常数约 20 帧）
-function kinRelease() {
-  inv[grabK] = 1;
-  grabTarget = null;
-  kin.releasing = true;
-  kin.tiny = kin.D < place.width * 0.05;
-  phase = 'falling'; phaseT = 0; mode = null;
-  releasedAt = performance.now();
-  kinTick(0);
-}
-function kinTick(dt) {
-  if (!kin.releasing) {
-    // 拖动中光标停住，抬高慢慢落下
-    const h = kinHeight();
-    if (Math.abs(h - kin.h) > 0.05) { kin.h = h; kinApply(); }
-    return;
-  }
-  const n = dt * 60;
-  kin.h *= Math.exp(-n / 3);
-  if (kin.tiny) {
-    const f = Math.exp(-n / 20);
-    if (!kin.cont) { kin.Vx *= f; kin.Vy *= f; }
-    else { const d = Math.max(kin.Vx * kin.ux + kin.Vy * kin.uy, 0) * (1 - f); kin.Vx -= d * kin.ux; kin.Vy -= d * kin.uy; }
-  }
-  kinApply();
-  if (kin.h > 0.3 || (kin.tiny && kin.D > 0.5)) return;
-  kinFinish();
-}
-// 停住：平移并进摆放，没动过的点正好在静止位置上
-function kinFinish() {
-  const k = kin;
-  k.h = 0; kin = k; kinApply();
-  const Tx = k.Tx, Ty = k.Ty;
-  kin = null; grabK = -1;
-  if (Tx || Ty) { place.cx += Tx; place.cy += Ty; savePlace(); computeRest(); }
-  if (k.D < 0.5) { snapToRest(); }
-  else {
-    for (let q = 0; q < N * 3; q++) prev[q] = pos[q];
-    deformed = true; maskDirty = true;
-    lastFold = { mode: 'fold' };
-  }
-  phase = 'idle';
-  console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', k.mode, deformed ? '停在折起的样子' : '平整');
-}
-// 别的动作（放平、Option、重新摆放）打断时，把进行中的手势就地停住
-function kinStop() {
-  if (!kin) return;
-  if (kin.pending) { kin = null; return; }
-  kinFinish();
 }
 
 // 角点 10 点以内算「角上」（缩放），角外 10 到 36 点、又不在布上算「角外」（旋转）
@@ -1139,7 +940,6 @@ function cornerZone(sx, sy) {
   return null;
 }
 function beginTransform(sx, sy) {
-  kinStop();
   if (phase === 'falling') { phase = 'idle'; deformed = true; maskDirty = true; }   // 变形时布停在现在的样子
   else if (phase === 'restoring') { snapToRest(); phase = 'idle'; }
   // 参考视频 f1300 起：按在角点上拖是缩放；f1150 起：按在角外一圈拖是旋转；按在布上拖是移动
@@ -1183,7 +983,7 @@ function moveTransform(sx, sy) {
     place.cx = o.x + (tf.c0.x - o.x) * k;
     place.cy = o.y + (tf.c0.y - o.y) * k;
   }
-  if (deformed) { applyPlaceDelta(before, place); computeRest(); maskDirty = true; lastFold = null; }
+  if (deformed) { applyPlaceDelta(before, place); computeRest(); maskDirty = true; }
   else snapToRest();
   needsRender = true;
 }
@@ -1229,9 +1029,7 @@ cv.addEventListener('pointercancel', up);
 
 // 明确的动作才把布整块摊平：双击地毯，或菜单里选「把地毯放平」
 function flatten() {
-  if (phase === 'drag') return;
-  kinStop();
-  if (phase === 'restoring' || (phase === 'idle' && !deformed)) return;
+  if (phase === 'drag' || phase === 'restoring' || (phase === 'idle' && !deformed)) return;
   refitPlacement();
   phase = 'restoring'; phaseT = 0; relaxing = false;
   releasedAt = performance.now();
@@ -1260,10 +1058,7 @@ function loop(t) {
   lastT = t;
   phaseT += dtFrame;
 
-  if (phase !== 'idle' && kin && !kin.pending) {
-    kinTick(dtFrame);
-    needsRender = true;
-  } else if (phase !== 'idle') {
+  if (phase !== 'idle') {
     // 摊平时刚度在 0.25 秒内平滑升到 100，再平滑升到 300，没有突然跳变
     const ramp = (a, b) => { const x = Math.min(Math.max((phaseT - a) / (b - a), 0), 1); return x * x * (3 - 2 * x); };
     const restoreK = phase === 'restoring' ? ramp(0, 0.25) * (100 + 200 * ramp(1.2, 2.7)) : 0;
