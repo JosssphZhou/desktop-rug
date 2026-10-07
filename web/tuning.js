@@ -2,5 +2,5 @@
 // 由 scripts/score/sweep.py 维护完整对象；每次保留前必须通过真实重放和回归。
 export default {
   "optmatch": 0.9375,
-  "foldfric": 4
+  "foldfric": 4.125
 };
