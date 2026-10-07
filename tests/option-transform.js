@@ -1,4 +1,4 @@
-// 回归测试：按住 Option 时，角外一圈拖是旋转（宽度不变），按在角点上拖是缩放（角度不变），参考视频 f1150 到 f1340。
+// 回归测试：按住 Option 时，角外一圈拖是旋转（宽度不变），按在角点上拖是缩放（角度不变、对角不动），参考视频 f1150 到 f1350。
 // 老版本里拖角同时旋转和缩放，这里两项都会不通过。
 // 用法：scripts/test-option.sh（由宿主 --eval-file 注入，结果写到标准输出）
 (async () => {
@@ -30,7 +30,8 @@
     t.beginTransform(c[0] + 2, c[1] + 1);
     await t.glide([c[0] + 2, c[1] + 1], [c[0] + 90, c[1] + 50], 700, t.moveTransform);
     t.endTransform();
-    const st2 = t.state().place;
+    const st2 = t.state().place, opp = t.cornersScreen()[0];
+    ok.push(['缩放时对角（左上角）不动', Math.hypot(opp[0] - cs[0][0], opp[1] - cs[0][1]) < 3, Math.hypot(opp[0] - cs[0][0], opp[1] - cs[0][1]).toFixed(1)]);
     ok.push(['角上拖动时宽度变大', st2.width - st1.width > 40, (st2.width - st1.width).toFixed(1)]);
     ok.push(['角上拖动时角度没变', Math.abs(deg(st2.angle - st1.angle)) < 0.05, deg(st2.angle - st1.angle).toFixed(2)]);
     // 3. 失败路径：在布外很远处按下不会开始变形

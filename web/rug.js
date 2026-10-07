@@ -845,10 +845,11 @@ function beginTransform(sx, sy) {
   else if (phase === 'restoring') { snapToRest(); phase = 'idle'; }
   // 参考视频 f1300 起：按在角点上拖是缩放；f1150 起：按在角外一圈拖是旋转；按在布上拖是移动
   const kind = cornerZone(sx, sy) || 'move';
+  const ci = nearestCorner(sx, sy), ko = [idx(0, 0), idx(NX, 0), idx(NX, NY), idx(0, NY)][(ci + 2) % 4];
   const m = toWorld(sx, sy);
   tf = {
     kind,
-    ci: nearestCorner(sx, sy), m0: m, c0: { x: place.cx, y: place.cy }, a0: place.angle, w0: place.width,
+    ci, opp: { x: rest[ko * 2], y: rest[ko * 2 + 1] }, m0: m, c0: { x: place.cx, y: place.cy }, a0: place.angle, w0: place.width,
     v0: new THREE.Vector2(m.x - place.cx, m.y - place.cy),
   };
   mode = 'transform';
@@ -875,8 +876,13 @@ function moveTransform(sx, sy) {
     const v = new THREE.Vector2(m.x - place.cx, m.y - place.cy);
     place.angle = tf.a0 + Math.atan2(v.y, v.x) - Math.atan2(tf.v0.y, tf.v0.x);
   } else {
-    const v = new THREE.Vector2(m.x - place.cx, m.y - place.cy);
-    place.width = Math.max(200, Math.min(W * 0.9, (tf.w0 * v.length()) / Math.max(tf.v0.length(), 1)));
+    // 缩放时对角不动（参考视频 f1300 到 f1350：宽从 804 放到 867，中心跟着往右下挪了 45 点）
+    const o = tf.opp, d0x = tf.m0.x - o.x, d0y = tf.m0.y - o.y;
+    let k = ((m.x - o.x) * d0x + (m.y - o.y) * d0y) / Math.max(d0x * d0x + d0y * d0y, 1);
+    k = Math.max(200 / tf.w0, Math.min((W * 0.9) / tf.w0, k));
+    place.width = tf.w0 * k;
+    place.cx = o.x + (tf.c0.x - o.x) * k;
+    place.cy = o.y + (tf.c0.y - o.y) * k;
   }
   if (deformed) { applyPlaceDelta(before, place); computeRest(); maskDirty = true; }
   else snapToRest();
