@@ -52,6 +52,10 @@ func log(_ s: String) {
 // 网页资源根目录：可执行文件在 build/ 下，资源在仓库根目录。
 let repoRoot: URL = {
     if let env = ProcessInfo.processInfo.environment["RUG_ROOT"] { return URL(fileURLWithPath: env) }
+    // 打包成 .app 时，网页资源在 Contents/Resources 里
+    if let res = Bundle.main.resourceURL, FileManager.default.fileExists(atPath: res.appendingPathComponent("web/index.html").path) {
+        return res
+    }
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
     return exe.deletingLastPathComponent().deletingLastPathComponent()
 }()

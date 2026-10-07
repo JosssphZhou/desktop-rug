@@ -25,13 +25,14 @@ camera.position.set(0, 0, CAM_DIST);
 camera.lookAt(0, 0, 0);
 
 const scene = new THREE.Scene();
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a66, 1.25));
-const sun = new THREE.DirectionalLight(0xffffff, 1.9);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a66, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 2.5);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0006;
 sun.shadow.normalBias = 0.6;
 sun.shadow.radius = 4;
+sun.shadow.intensity = 0.6;   // 布上的自投影淡一些，鼓包读起来是起伏而不是污渍
 scene.add(sun, sun.target);
 
 // 接影子的透明地面，比布低一点，地毯边缘有一圈细影
@@ -120,7 +121,7 @@ function computeRest() {
 
 // 图标鼓包：每个图标在布下面是一个圆滑的小丘，叠得越多越高
 let icons = [];   // {x, y} 世界坐标
-const BUMP_R = 44, BUMP_H = 9, BUMP_MAX = 46;
+const BUMP_R = 48, BUMP_H = 16, BUMP_MAX = 60;
 function bumpAt(x, y) {
   if (!icons.length) return 0;
   let h = 0;
@@ -534,7 +535,8 @@ function loop(t) {
   }
 
   const animated = surface && (surface.animated || t - surfaceBorn < surface.warmupMs);
-  if (animated) { surfaceTex.needsUpdate = true; needsRender = true; }
+  // 动态材质在地毯静止时按 30 帧刷新，省一半耗电；拖动和录制时每帧都刷新
+  if (animated && (phase !== 'idle' || mode !== null || recorder || (frameCount & 1) === 0)) { surfaceTex.needsUpdate = true; needsRender = true; }
   if (recorder) needsRender = true;   // 录制时每帧都画，否则录到被清空的画布
 
   if (needsRender) {
@@ -542,7 +544,7 @@ function loop(t) {
     geo.computeVertexNormals();
     updateFringe();
     const [lx, ly] = [place.cx, place.cy];
-    sun.position.set(lx - 420, ly + 520, 1100);
+    sun.position.set(lx - 650, ly + 700, 800);   // 斜射光，鼓包和褶皱才有明暗
     sun.target.position.set(lx, ly, 0);
     const r = place.width * 0.85;
     Object.assign(sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 100, far: 3000 });
