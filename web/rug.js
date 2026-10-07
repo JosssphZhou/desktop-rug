@@ -122,6 +122,8 @@ const NC = CA.length;
 const ITER = +(params.get('iter') ?? 8);           // 每个子步里约束迭代的次数
 const FRIC_DRAG = +(params.get('fric') ?? 0.03);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
 const LEASH = +(params.get('leash') ?? 1.25);   // 抓点离周围的点最远不超过静止间距的 1.25 倍
+const STICK = +(params.get('stick') ?? 40);   // 松手后贴地的点慢于每秒 40 点（毯宽 680 为基准）就粘住不动
+const SPASS = +(params.get('spass') ?? 12);   // 限制伸长的遍数：2 遍时猛拖仍会局部拉长 15% 以上，12 遍压到 9% 以内
 const MAX_STRAIN = +(params.get('strain') ?? 1.04);  // 最大伸长：布不能被拉长，最多比静止长度长 4%
 const LIM = Int32Array.from(Array.from({ length: NC }, (_, c) => c).filter((c) => CS[c] >= 0.5));
 const NLIM = LIM.length;
@@ -244,6 +246,14 @@ function updateFloor() {
   for (let k = 0; k < N; k++) floorZ[k] = bumpAt(pos[k * 3], pos[k * 3 + 1]) + (flipped[k] ? LAYER() : 0);
 }
 
+// 布在桌面上盖住的面积占摊平时的比例：按一格的边长打格子，数有布点落进去的格子。摊平是 1，对折一半约 0.5 到 0.65，皱成一团更小
+const coverSet = new Set();
+function coverFrac() {
+  const cell = place.width / NX;
+  coverSet.clear();
+  for (let k = 0; k < N; k++) coverSet.add(Math.floor(pos[k * 3] / cell) * 100003 + Math.floor(pos[k * 3 + 1] / cell));
+  return coverSet.size / N;
+}
 function step(dt, restoreK, curlK = 0, extraDamp = 1) {
   const g = GRAVITY * dt * dt;
   const damp = Math.pow(restoreK > 0 ? 0.9 : 0.965, dt * 120) * (extraDamp < 1 ? Math.pow(extraDamp, dt * 120) : 1);   // 以 120 Hz 子步为基准，和帧率无关
@@ -302,7 +312,8 @@ function step(dt, restoreK, curlK = 0, extraDamp = 1) {
               // 抓着拖时是库仑摩擦：每步只扣掉固定的一小段滑动，拉得动就整块跟着走，没被拉的部分贴着不动
               const m = Math.hypot(fx, fy), cut = Math.min(m, FRIC_DRAG * place.width / 680);
               if (m > 1e-9) { fx *= (m - cut) / m; fy *= (m - cut) / m; }
-            } else { fx *= 0.35; fy *= 0.35; }   // 松手后摩擦大，布停在原地
+            } else if (Math.hypot(fx, fy) < STICK * dt * place.width / 680) { fx = 0; fy = 0; }   // 静摩擦：贴地的点慢慢蹭的时候直接粘住，布不会一直蠕动
+            else { fx *= 0.35; fy *= 0.35; }   // 松手后摩擦大，布停在原地
             pos[o] = prev[o] + fx;
             pos[o + 1] = prev[o + 1] + fy;
           }
@@ -341,7 +352,7 @@ function step(dt, restoreK, curlK = 0, extraDamp = 1) {
     }
   }
   // 限制最大伸长：布不能被拉长。结构约束和剪切约束超过 MAX_STRAIN 就直接拉回，这样拖得再猛也不会拉成橡皮
-  for (let pass = 0; pass < 2; pass++) {
+  for (let pass = 0; pass < SPASS; pass++) {
     for (let q = 0; q < NLIM; q++) {
       const c = LIM[q];
       const a = CA[c] * 3, b = CB[c] * 3;
@@ -376,8 +387,15 @@ function refitPlacement() {
     const bx = pos[k * 3] - mx, by = pos[k * 3 + 1] - my;
     sxx += ax * bx + ay * by; sxy += ax * by - ay * bx;
   }
-  const angle = Math.atan2(sxy, sxx);
-  const c = Math.cos(angle), s = Math.sin(angle);
+  let angle = Math.atan2(sxy, sxx);
+  // 布皱成一团时贴地的点不再是一块刚性的布，拟合出的角度不可信（重放视频时曾一下转了 83 度、挪了 330 点）。
+  // 这时只按贴地部分平移，角度保持原样
+  let c = Math.cos(angle), s = Math.sin(angle), err = 0;
+  for (const k of keep) {
+    const ax = local[k * 2] * w - lx, ay = local[k * 2 + 1] * w - ly;
+    err += (pos[k * 3] - mx - (ax * c - ay * s)) ** 2 + (pos[k * 3 + 1] - my - (ax * s + ay * c)) ** 2;
+  }
+  if (Math.sqrt(err / n) > w * 0.06) { angle = place.angle; c = Math.cos(angle); s = Math.sin(angle); }
   const ncx = mx - (lx * c - ly * s), ncy = my - (lx * s + ly * c);
   // 只是掀了一下、整体没怎么动时落回原位；真的拖走了才认新位置
   let da = angle - place.angle; da = Math.atan2(Math.sin(da), Math.cos(da));
@@ -796,25 +814,40 @@ function beginGrab(sx, sy) {
   grabStart = [sx, sy];
   grabTarget = new THREE.Vector3(pos[best * 3], pos[best * 3 + 1], pos[best * 3 + 2]);
   grabZ0 = pos[best * 3 + 2];   // 抓到的那一刻布离桌面多高，鼠标没动之前不再抬
+  grabSX = sx; grabSY = sy; grabMoveT = now();
   phase = 'drag';
   mode = 'cloth';
   moveGrab(sx, sy);
   return true;
 }
+// 鼠标停住时抓着的那一角慢慢放到桌面上（参考视频 f0278 到 f0290、f0503 到 f0515：光标停着，折过去的那片已经平躺）
+let grabSX = 0, grabSY = 0, grabZFull = 0, grabMoveT = 0;
 function moveGrab(sx, sy) {
   if (grabK < 0 || !grabStart) return;
   const dist = Math.hypot(sx - grabStart[0], sy - grabStart[1]);
   // 6 点死区：鼠标还没明显移动时布不抬；之后每移动 1 点抬 0.16 点，最多抬到毯宽的 10%
   const lift = Math.min(Math.max(dist - 6, 0) * 0.16, place.width * 0.1);
-  const p = screenToPlane(sx, sy, grabZ0 + lift);
+  let z = grabZ0 + lift;
+  const p = screenToPlane(sx, sy, z);
   if (!p) return;
   // 把布拖回它原来的位置附近（32 点内）时逐渐放低，盖回去不会悬在半空
   const dr = Math.hypot(p.x - rest[grabK * 2], p.y - rest[grabK * 2 + 1]);
   if (dr < 32) {
-    const t = dr / 32, base = floorZ[grabK];
-    p.z = base + (grabZ0 + lift - base) * t;
+    const base = floorZ[grabK];
+    z = base + (grabZ0 + lift - base) * (dr / 32);
   }
-  grabTarget.copy(p);
+  if (Math.hypot(sx - grabSX, sy - grabSY) > 0.5) grabMoveT = now();
+  grabSX = sx; grabSY = sy; grabZFull = z;
+  holdGrab();
+}
+// 光标停住 80 毫秒后，抓点高度按 0.12 秒的时间常数降到贴着下面那层布
+function holdGrab() {
+  if (grabK < 0 || !grabTarget) return;
+  const still = now() - grabMoveT;
+  const h = params.get('nohold') || still < 80 ? 1 : Math.exp(-(still - 80) / +(params.get('holdtau') ?? 120));
+  const base = Math.min(grabZFull, floorZ[grabK] + thick());
+  const p = screenToPlane(grabSX, grabSY, base + (grabZFull - base) * h);
+  if (p) grabTarget.copy(p);
 }
 function endGrab() {
   if (grabK >= 0) inv[grabK] = 1;
@@ -932,7 +965,7 @@ cv.addEventListener('pointercancel', up);
 function flatten() {
   if (phase === 'drag' || phase === 'restoring' || (phase === 'idle' && !deformed)) return;
   refitPlacement();
-  phase = 'restoring'; phaseT = 0;
+  phase = 'restoring'; phaseT = 0; relaxing = false;
   releasedAt = performance.now();
   wake();
 }
@@ -940,7 +973,9 @@ window.rugFlatten = flatten;
 
 // ---------- 主循环 ----------
 // 逐帧录制对比视频时用模拟时钟：每次只走 1/60 秒，和真实时间无关
-let offline = false, simNow = 0;
+let offline = false, simNow = 0, lastFlipCount = 0;
+let relaxing = false;   // 皱团舒展中：和放平同一套力，展开到一定程度就停
+const RELAX_COVER = +(params.get('relax') ?? 0.45), RELAX_STOP = 0.85;
 const now = () => (offline ? simNow : performance.now());
 let lastT = performance.now();
 let frameCount = 0, fpsT = lastT, fps = 0;
@@ -961,17 +996,22 @@ function loop(t) {
     // 摊平时刚度在 0.25 秒内平滑升到 100，再平滑升到 300，没有突然跳变
     const ramp = (a, b) => { const x = Math.min(Math.max((phaseT - a) / (b - a), 0), 1); return x * x * (3 - 2 * x); };
     const restoreK = phase === 'restoring' ? ramp(0, 0.25) * (100 + 200 * ramp(1.2, 2.7)) : 0;
-    const curlK = phase === 'falling' && phaseT > 0.12 ? 12 : 0;
-    const extraDamp = phase === 'falling' && phaseT > 3 ? 0.97 : 1;   // 3 秒还没停稳就加大阻尼，不强行结束
+    // 小翘角慢慢放平；翻过去的布超过 5% 就是一次真正的对折，折痕不去动它（参考视频 f0293 以后大折叠一直不动）
+    const curlK = phase === 'falling' && phaseT > 0.12 && lastFlipCount < N * 0.05 ? 12 : 0;
+    // 松手 0.25 秒后加大阻尼：参考视频里松手后布零帧回弹、不再蠕动（f0293 到 f0420 面积变化小于 0.02%）
+    // 0.6 秒后再加大一档，残留的慢慢蠕动很快停下
+    const extraDamp = phase !== 'falling' || phaseT <= 0.25 ? 1 : phaseT <= 0.6 ? 0.93 : +(params.get('fdamp') ?? 0.8);
     updateFloor();
+    if (phase === 'drag') holdGrab();
     const SUB = +(params.get('sub') ?? 3);
     for (let s = 0; s < SUB; s++) step(dtFrame / SUB, restoreK, curlK, extraDamp);
     // 用上一帧的法线判断哪些点翻过去了
     const nrm = geo.attributes.normal.array;
     let flipCount = 0;
     for (let k = 0; k < N; k++) { const f = nrm[k * 3 + 2] < -0.15 ? 1 : 0; flipCount += f; flipped[k] = f; }
+    lastFlipCount = flipCount;
     if (phase === 'falling') {
-      // 松手后只受重力。按速度（点每秒）判断停稳：95% 的点慢于 8S，最快的慢于 30S，连续 250 毫秒，
+      // 松手后只受重力。按速度（点每秒）判断停稳：95% 的点慢于 20S，最快的慢于 40S（再慢的蠕动肉眼看不出，直接停住），连续 250 毫秒，
       // 且松手至少 300 毫秒。S 是毯宽相对 680 点的比例。不再有无条件结束
       const S = place.width / 680, sub = dtFrame / SUB;
       let vmax = 0, fast = 0, cnt = 0;
@@ -980,23 +1020,34 @@ function loop(t) {
         const o = k * 3;
         const v = Math.hypot(pos[o] - prev[o], pos[o + 1] - prev[o + 1], pos[o + 2] - prev[o + 2]) / sub;
         if (v > vmax) vmax = v;
-        if (v > 8 * S) fast++;
+        if (v > 20 * S) fast++;
         cnt++;
       }
-      const calm = vmax < 30 * S && fast < cnt * 0.05;
+      const calm = vmax < 40 * S && fast < cnt * 0.05;
       calmMs = calm ? calmMs + dtFrame * 1000 : 0;
       if (params.get('debug') && (frameCount % 10) === 0) console.log('落下', phaseT.toFixed(2), 'vmax', vmax.toFixed(1), '快点比例', (fast / cnt).toFixed(3), '翻面点数', flipCount);
-      if ((calmMs >= 250 && phaseT >= 0.3) || phaseT > 14) {
+      // 皱成一团的不等它停稳：松手 0.4 秒后盖住的面积还不到 45% 就开始舒展
+      const heap = phaseT > 0.4 && coverFrac() < RELAX_COVER;
+      if ((calmMs >= 250 && phaseT >= 0.3) || phaseT > 14 || heap) {
         let maxD = 0;
         for (let k = 0; k < N; k++) {
           const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
           if (d > maxD) maxD = d;
         }
         // 没有翻面、所有点离原位 3 点内才吸附回平铺，免得留下看不出来的歪斜；叠着的布不会被吸附
-        if (maxD < 3 * S && flipCount === 0) snapToRest(); else { deformed = true; maskDirty = true; }
-        for (let k = 0; k < N * 3; k++) prev[k] = pos[k];
-        phase = 'idle';
-        console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', deformed ? '停在掀起的样子' : '平整');
+        const cover = coverFrac();
+        if (maxD < 3 * S && flipCount === 0) snapToRest();
+        else if (cover < RELAX_COVER) {
+          // 皱成一团（盖住的面积不到摊平时的 45%，干净的对折在 0.55 以上）：大致舒展开，展到 85% 就停，留下大的折痕
+          refitPlacement(); computeRest();
+          phase = 'restoring'; phaseT = 0; relaxing = true;
+          console.log('皱成一团，舒展开', cover.toFixed(2));
+        } else { deformed = true; maskDirty = true; }
+        if (!relaxing) {
+          for (let k = 0; k < N * 3; k++) prev[k] = pos[k];
+          phase = 'idle';
+        }
+        if (!relaxing) console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', deformed ? '停在掀起的样子' : '平整');
       }
     }
     if (phase === 'restoring') {
@@ -1005,7 +1056,8 @@ function loop(t) {
         const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
         if (d > maxD) maxD = d;
       }
-      if (maxD < 1.2 || phaseT > 5) { snapToRest(); phase = 'idle'; console.log('放平用时', (performance.now() - releasedAt).toFixed(0) + 'ms'); }
+      if (relaxing && coverFrac() >= RELAX_STOP) { relaxing = false; phase = 'falling'; phaseT = 0; calmMs = 0; }
+      else if (maxD < 1.2 || phaseT > 5) { relaxing = false; snapToRest(); phase = 'idle'; console.log('放平用时', (performance.now() - releasedAt).toFixed(0) + 'ms'); }
     }
     needsRender = true;
   }
@@ -1334,6 +1386,6 @@ window.__t = {
       sum += d;
     }
     for (let k = 0; k < N; k++) { if (Math.abs(nrm[k * 3 + 2]) < 0.7) steep++; if (nrm[k * 3 + 2] < -0.15) flips++; }
-    return { maxStretch: +maxStretch.toFixed(3), steepFrac: +(steep / N).toFixed(3), flips };
+    return { maxStretch: +maxStretch.toFixed(3), steepFrac: +(steep / N).toFixed(3), flips, cover: +coverFrac().toFixed(3) };
   },
 };
