@@ -18,7 +18,8 @@ struct Options {
     var pose: String? = nil
     var alwaysRender = false
     var testMenu = false
-    var reset = false   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
+    var reset = false
+    var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
     init(_ args: [String]) {
         var i = 1
@@ -38,6 +39,7 @@ struct Options {
             case "--always-render": alwaysRender = true
             case "--test-menu": testMenu = true
             case "--reset": reset = true
+            case "--plain": extraQuery.append("plain=1")
             default: break
             }
             i += 1
@@ -173,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if options.record != nil { query.append("record=1") }
         if let p = options.pose { query.append("pose=\(p)") }
         if options.reset { query.append("reset=1") }
+        query.append(contentsOf: options.extraQuery)
         let url = URL(string: "rug://app/web/index.html?" + query.joined(separator: "&"))!
         webView.load(URLRequest(url: url))
 

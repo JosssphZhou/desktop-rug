@@ -14,7 +14,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(W, H);
 renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.VSMShadowMap;   // 可以模糊的软阴影，鼓包和褶子的影子边缘不会发硬
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
@@ -25,14 +25,17 @@ camera.position.set(0, 0, CAM_DIST);
 camera.lookAt(0, 0, 0);
 
 const scene = new THREE.Scene();
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a66, 1.0));
-const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x5a4d3f, 0.8);
+hemi.position.set(0, 0, 1);   // 本场景朝上的方向是 z，不是默认的 y，否则斜面的明暗会错
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff6ea, 3.0);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0006;
 sun.shadow.normalBias = 0.6;
-sun.shadow.radius = 4;
-sun.shadow.intensity = 0.6;   // 布上的自投影淡一些，鼓包读起来是起伏而不是污渍
+sun.shadow.radius = 9;
+sun.shadow.blurSamples = 16;
+sun.shadow.intensity = 0.5;   // 投影淡一些，鼓包靠朝光面的亮和背光坡的暗来读，不靠一块黑影
 scene.add(sun, sun.target);
 
 // 接影子的透明地面，比布低一点，地毯边缘有一圈细影
@@ -76,7 +79,7 @@ if (params.get('rug')) {
 const savePlace = () => { try { localStorage.setItem('rug.place', JSON.stringify(place)); } catch (e) {} };
 
 // ---------- 布料 ----------
-const NX = 60, NY = 40;
+const NX = 84, NY = 56;   // 网格够密，鼓包边上的褶子才画得出来
 const N = (NX + 1) * (NY + 1);
 const idx = (i, j) => j * (NX + 1) + i;
 const pos = new Float32Array(N * 3);
@@ -117,19 +120,82 @@ function computeRest() {
     rest[k * 2] = place.cx + lx * c - ly * s;
     rest[k * 2 + 1] = place.cy + lx * s + ly * c;
   }
+  if (stacks.length) drapeRest();
 }
 
-// 图标鼓包：每个图标在布下面是一个圆滑的小丘，叠得越多越高
-let icons = [];   // {x, y} 世界坐标
-const BUMP_R = 48, BUMP_H = 16, BUMP_MAX = 60;
-function bumpAt(x, y) {
-  if (!icons.length) return 0;
-  let h = 0;
-  for (const ic of icons) {
-    const dx = x - ic.x, dy = y - ic.y, d2 = dx * dx + dy * dy;
-    if (d2 < BUMP_R * BUMP_R) { const t = 1 - d2 / (BUMP_R * BUMP_R); h += BUMP_H * t * t; }
+// 布盖过鼓包时，坡面要多用掉一段布，四周的布会被往鼓包中心拉过去一点，
+// 花纹也跟着往里聚、直线绕着鼓包弯。只改静止位置，物理和落回都以它为目标。
+function drapeRest() {
+  for (let k = 0; k < N; k++) {
+    const x = rest[k * 2], y = rest[k * 2 + 1];
+    let sx = 0, sy = 0;
+    for (const st of stacks) {
+      const dx = x - st.x, dy = y - st.y;
+      const r = Math.hypot(dx, dy);
+      if (r < 1 || r > ICON_HALF + st.F * 5) continue;
+      const d = r - ICON_HALF;   // 近似为离图标边缘的距离
+      if (d <= 0) continue;
+      const m = (1.5 * st.h) / st.F;
+      const e = Math.sqrt(1 + m * m) - 1;   // 每走一点水平距离，坡面多用掉的布
+      const S = d < st.F ? e * d : e * st.F * Math.exp(-(d - st.F) / (1.6 * st.F));
+      sx -= (dx / r) * Math.min(S, d * 0.8);
+      sy -= (dy / r) * Math.min(S, d * 0.8);
+    }
+    const len = Math.hypot(sx, sy), cap = 14;
+    const f = len > cap ? cap / len : 1;
+    rest[k * 2] = x + sx * f;
+    rest[k * 2 + 1] = y + sy * f;
   }
-  return Math.min(h, BUMP_MAX);
+}
+
+// 图标鼓包：布被下面的图标顶起来。
+// 位置相近的图标算作一摞，摞得越多越高；顶部是图标的圆角方块形状，四周向外坡下去，
+// 坡上有一圈放射状的褶子，像布被拉紧的样子。
+let icons = [];    // {x, y} 世界坐标
+let stacks = [];   // {x, y, h, F, K, ph}
+const ICON_HALF = 24;      // 图标顶面的半边长
+const ICON_CORNER = 9;
+function buildStacks() {
+  stacks = [];
+  for (const ic of icons) {
+    const st = stacks.find((s) => Math.hypot(s.sx / s.n - ic.x, s.sy / s.n - ic.y) < 26);
+    if (st) { st.n++; st.sx += ic.x; st.sy += ic.y; }
+    else stacks.push({ n: 1, sx: ic.x, sy: ic.y });
+  }
+  stacks.forEach((s, i) => {
+    s.x = s.sx / s.n; s.y = s.sy / s.n;
+    s.h = Math.min(11 + 8 * (s.n - 1), 52);   // 一个图标约 11 点高，每多一个加 8 点
+    s.F = 10 + s.h * 1.15;                      // 坡的水平长度，越高坡越长
+    s.K = 4 + (i % 3);                          // 褶子的条数
+    s.ph = i * 1.7;
+  });
+}
+const smooth = (t) => t * t * (3 - 2 * t);
+function bumpAt(x, y) {
+  let best = 0;
+  for (const s of stacks) {
+    const dx = x - s.x, dy = y - s.y;
+    const reach = ICON_HALF + s.F * 2;
+    if (dx > reach || dx < -reach || dy > reach || dy < -reach) continue;
+    // 圆角方块的有向距离：方块内为负
+    const qx = Math.abs(dx) - (ICON_HALF - ICON_CORNER), qy = Math.abs(dy) - (ICON_HALF - ICON_CORNER);
+    const d = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - ICON_CORNER;
+    let h;
+    if (d <= 0) h = s.h * (1 + 0.04 * Math.min(-d / ICON_HALF, 1));   // 顶面略微鼓起
+    else if (d < s.F) h = s.h * (1 - smooth(d / s.F));
+    else h = 0;
+    // 拉紧的褶子：从坡上往外放射，离开图标越远越淡
+    const u = (d + 2) / (s.F * 3.4);
+    if (u > 0 && u < 1) {
+      const ang = Math.atan2(dy, dx);
+      // 每条褶子宽窄、强弱不一，往外略微打弯
+      const a = ang * s.K + s.ph + Math.sin(ang * 2 + s.ph) * 0.7 + u * 0.8;
+      const ridge = Math.pow(Math.max(0, Math.cos(a)), 1.6) * (0.55 + 0.45 * Math.sin(ang * 3 + s.ph * 2));
+      h += (3 + s.h * 0.4) * ridge * Math.sin(Math.PI * Math.sqrt(u)) * (1 - u);
+    }
+    if (h > best) best = h;
+  }
+  return best;
 }
 
 function snapToRest() {
@@ -150,6 +216,7 @@ let phaseT = 0;
 let grabK = -1;
 let grabTarget = null;
 let grabStart = null;
+let releasedAt = 0;
 const GRAVITY = 2600;
 const LAYER = 3.2;   // 翻过来的那一层比底下高出的距离
 
@@ -279,14 +346,15 @@ const overlayTex = makeOverlay();
 let surface = null;
 let surfaceTex = null;
 let surfaceBorn = 0;
-const frontMat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0, side: THREE.FrontSide });
+// 正面用带绒面光泽的材质：朝光的坡面会亮起一层柔和的高光，像羊毛绒头
+const frontMat = new THREE.MeshPhysicalMaterial({ roughness: 0.85, specularIntensity: 0.3, metalness: 0, side: THREE.FrontSide, sheen: 0.3, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffe2c0) });
 const backMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, side: THREE.BackSide, color: 0x9a8c7a });
 for (const m of [frontMat, backMat]) {
   m.onBeforeCompile = (shader) => {
     shader.uniforms.overlayMap = { value: overlayTex };
     shader.fragmentShader = 'uniform sampler2D overlayMap;\n' + shader.fragmentShader.replace(
       '#include <map_fragment>',
-      '#include <map_fragment>\nvec4 ovl = texture2D(overlayMap, vMapUv);\ndiffuseColor.rgb = mix(diffuseColor.rgb, ovl.rgb, ovl.a);',
+      '#include <map_fragment>\n#ifdef USE_MAP\nvec4 ovl = texture2D(overlayMap, vMapUv);\ndiffuseColor.rgb = mix(diffuseColor.rgb, ovl.rgb, ovl.a);\n#endif\n',
     );
   };
 }
@@ -307,7 +375,7 @@ function setMaterial(id) {
   surfaceTex = new THREE.CanvasTexture(surface.canvas);
   surfaceTex.colorSpace = THREE.SRGBColorSpace;
   surfaceTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  frontMat.map = backMat.map = surfaceTex;
+  frontMat.map = backMat.map = params.get('plain') ? null : surfaceTex;   // plain=1 时用纯色布检查光照
   frontMat.needsUpdate = backMat.needsUpdate = true;
   surfaceBorn = performance.now();
   needsRender = true;
@@ -448,6 +516,7 @@ function endGrab() {
   grabK = -1; grabTarget = null;
   phase = 'falling'; phaseT = 0;
   mode = null;
+  releasedAt = performance.now();
 }
 
 function beginTransform(sx, sy) {
@@ -529,7 +598,7 @@ function loop(t) {
         const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
         if (d > maxD) maxD = d;
       }
-      if (maxD < 1.2 || phaseT > 4) { snapToRest(); phase = 'idle'; }
+      if (maxD < 1.2 || phaseT > 4) { snapToRest(); phase = 'idle'; console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms'); }
     }
     needsRender = true;
   }
@@ -544,7 +613,7 @@ function loop(t) {
     geo.computeVertexNormals();
     updateFringe();
     const [lx, ly] = [place.cx, place.cy];
-    sun.position.set(lx - 650, ly + 700, 800);   // 斜射光，鼓包和褶皱才有明暗
+    sun.position.set(lx - 700, ly + 760, 640);   // 斜射光，鼓包和褶皱才有明暗
     sun.target.position.set(lx, ly, 0);
     const r = place.width * 0.85;
     Object.assign(sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 100, far: 3000 });
@@ -571,6 +640,7 @@ window.rugSetMaterial = (id) => { setMaterial(id); wake(); };
 window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };
 window.rugSetIcons = (list) => {
   icons = list.map(([x, y]) => { const p = toWorld(x, y); return { x: p.x, y: p.y }; });
+  buildStacks();
   snapToRest(); phase = 'falling'; phaseT = 0; wake();
 };
 window.__testMove = () => {
@@ -718,10 +788,14 @@ async function stopRecording() {
 if (params.get('fakeBumps')) {
   // 模拟数据：在地毯下面放几摞假的图标，用来演示鼓包效果
   const w = place.width, h = w * ASPECT;
-  const spots = [[-0.3, 0.18, 3], [-0.22, 0.24, 1], [0.18, -0.12, 1], [0.3, 0.2, 2], [0.02, 0.05, 1], [-0.05, -0.28, 2]];
+  // 每项是 [横向位置, 纵向位置, 这一摞有几个图标]，位置以地毯宽高为单位
+  const spots = [[-0.3, 0.2, 3], [0.27, 0.22, 1], [0.24, -0.2, 2], [-0.2, -0.22, 1], [0.02, 0.02, 4]];
   icons = [];
-  for (const [u, v, n] of spots) for (let s = 0; s < n; s++) icons.push({ x: place.cx + u * w + s * 6, y: place.cy + v * h - s * 5 });
+  for (const [u, v, n] of spots) for (let s = 0; s < n; s++) icons.push({ x: place.cx + u * w + s * 4, y: place.cy + v * h - s * 3 });
+  buildStacks();
   snapToRest();
+  let mz = 0; for (let k = 0; k < N; k++) mz = Math.max(mz, pos[k * 3 + 2]);
+  console.log('模拟图标', stacks.map((t) => `${t.n}个高${t.h}`).join(' '), '网格最高点', mz.toFixed(1));
 }
 if (params.get('reset')) window.rugReset();
 computeRest();
