@@ -573,6 +573,19 @@ window.rugSetIcons = (list) => {
   icons = list.map(([x, y]) => { const p = toWorld(x, y); return { x: p.x, y: p.y }; });
   snapToRest(); phase = 'falling'; phaseT = 0; wake();
 };
+window.__testMove = () => {
+  // 测试 Option 拖中间移动：从地毯中心往右下拖 (60, 40) 点
+  const before = { ...place };
+  const [cx, cy] = toScreen(place.cx, place.cy, 0);
+  window.rugSetOption(true);
+  beginTransform(cx, cy);
+  const kind = tf.kind;
+  moveTransform(cx + 60, cy + 40);
+  endTransform();
+  window.rugSetOption(false);
+  console.log('测试移动', kind, '中心变化', (place.cx - before.cx).toFixed(1), (place.cy - before.cy).toFixed(1), '角度变化', (place.angle - before.angle).toFixed(3), '材质', materialId);
+  place = before; savePlace(); snapToRest(); wake();
+};
 window.rugState = () => ({ phase, place, fps: window.__fps, materialId, icons: icons.length });
 
 // ---------- 演示脚本：用虚拟抓点走一遍，不动真鼠标 ----------
@@ -710,6 +723,7 @@ if (params.get('fakeBumps')) {
   for (const [u, v, n] of spots) for (let s = 0; s < n; s++) icons.push({ x: place.cx + u * w + s * 6, y: place.cy + v * h - s * 5 });
   snapToRest();
 }
+if (params.get('reset')) window.rugReset();
 computeRest();
 setMaterial(materialId);
 wake();

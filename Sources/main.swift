@@ -16,7 +16,9 @@ struct Options {
     var record: String? = nil   // 演示时录成视频，写到这个路径
     var selfTest = false
     var pose: String? = nil
-    var alwaysRender = false   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
+    var alwaysRender = false
+    var testMenu = false
+    var reset = false   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
     init(_ args: [String]) {
         var i = 1
@@ -34,6 +36,8 @@ struct Options {
             case "--self-test": selfTest = true
             case "--pose": pose = next(); alwaysRender = true
             case "--always-render": alwaysRender = true
+            case "--test-menu": testMenu = true
+            case "--reset": reset = true
             default: break
             }
             i += 1
@@ -120,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if options.reset { currentMaterial = "persian"; UserDefaults.standard.set("persian", forKey: "material") }
         if let m = options.material { currentMaterial = m }
 
         let screen = NSScreen.main!
@@ -167,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if let r = options.rug { query.append("rug=\(r)") }
         if options.record != nil { query.append("record=1") }
         if let p = options.pose { query.append("pose=\(p)") }
+        if options.reset { query.append("reset=1") }
         let url = URL(string: "rug://app/web/index.html?" + query.joined(separator: "&"))!
         webView.load(URLRequest(url: url))
 
@@ -182,6 +188,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer!, forMode: .common)
 
+        if options.testMenu {
+            // 走菜单项的同一个函数切换花样，再让网页测一次 Option 拖中间移动
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if let item = self.materialItems.first(where: { ($0.representedObject as? String) == "dots" }) {
+                    self.pickMaterial(item)
+                    log("测试：已通过菜单函数切到 dots，菜单勾选=\(item.state == .on)")
+                }
+                self.webView.evaluateJavaScript("window.__testMove && window.__testMove()")
+            }
+        }
         if options.selfTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.runSelfTest() }
         }
