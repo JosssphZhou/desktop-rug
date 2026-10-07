@@ -63,15 +63,33 @@ function screenToPlane(sx, sy, z) {
 
 // ---------- 地毯摆放状态（保存在本地） ----------
 const ASPECT = 44 / 70;   // 宽高比 1.59，参考视频静止的地毯是 1.598
-// 默认位置按参考视频 f0700：毯宽占屏宽 46%（屏幕很宽时最多 720 点，约十二个桌面图标宽），
-// 中心在屏幕横向 50.4%、纵向 44.1% 处，逆时针歪 3 度
+// 默认位置按参考视频 f0700：毯宽占屏宽 46%，中心在屏幕横向 50.4%、纵向 44.1% 处，逆时针歪 3 度。
+// 以前在宽屏上最多 720 点宽，2560 点宽的屏幕上只占 28%，图标一多就盖不住
 function defaultPlacement() {
-  return { cx: W * 0.004, cy: H * 0.059, angle: (3 * Math.PI) / 180, width: Math.min(W * 0.46, 720) };
+  return { cx: W * 0.004, cy: H * 0.059, angle: (3 * Math.PI) / 180, width: W * 0.46 };
+}
+// 放大的上限：铺满整个屏幕（宽不小于屏宽，高不小于屏高）
+const MAX_W = Math.max(W, H / ASPECT);
+// 尽量让整块地毯留在屏幕里：只挪中心，不改大小和角度
+function keepOnScreen(p) {
+  const c = Math.abs(Math.cos(p.angle)), s = Math.abs(Math.sin(p.angle)), w = p.width, h = p.width * ASPECT;
+  const ex = (c * w + s * h) / 2, ey = (s * w + c * h) / 2;
+  const fit = (v, e, half) => (e >= half ? 0 : Math.min(Math.max(v, -half + e), half - e));
+  return { ...p, cx: fit(p.cx, ex, W / 2), cy: fit(p.cy, ey, H / 2) };
+}
+// 读出保存的摆放。宽度正好是老版本默认值（680 或 720 点）说明从没放大过，按现在的默认宽度放大，中心和角度不变
+const OLD_DEFAULT_W = [680, 720];
+function loadPlace(saved) {
+  if (!saved || !isFinite(saved.width) || !isFinite(saved.cx) || !isFinite(saved.cy)) return defaultPlacement();
+  const p = { cx: saved.cx, cy: saved.cy, angle: saved.angle || 0, width: saved.width };
+  const nw = defaultPlacement().width;
+  if (OLD_DEFAULT_W.includes(Math.round(p.width)) && nw > p.width) return keepOnScreen({ ...p, width: nw });
+  return p;
 }
 let place = defaultPlacement();
 try {
-  const saved = JSON.parse(localStorage.getItem('rug.place') || 'null');
-  if (saved && isFinite(saved.width)) place = saved;
+  const raw = localStorage.getItem('rug.place');
+  if (raw) place = loadPlace(JSON.parse(raw));
 } catch (e) { /* 本地存储不可用时用默认位置 */ }
 if (params.get('rug')) {
   const [x, y, w] = params.get('rug').split(',').map(Number);
@@ -80,6 +98,7 @@ if (params.get('rug')) {
 }
 // 测试时用 --rug 指定了位置，就不写回本地存储，免得覆盖老板平时摆好的位置
 const savePlace = () => { if (params.get('rug')) return; try { localStorage.setItem('rug.place', JSON.stringify(place)); } catch (e) {} };
+try { const raw = localStorage.getItem('rug.place'); if (raw && JSON.parse(raw).width !== place.width && !params.get('rug')) savePlace(); } catch (e) {}   // 老版本默认宽度放大以后马上存下，之后不再重复放大
 
 // ---------- 布料 ----------
 const NX = 70, NY = 44;   // 网格是正方形，宽高比 70:44 约等于参考视频里的 1.6
@@ -912,7 +931,7 @@ function moveTransform(sx, sy) {
     // 缩放时对角不动（参考视频 f1300 到 f1350：宽从 804 放到 867，中心跟着往右下挪了 45 点）
     const o = tf.opp, d0x = tf.m0.x - o.x, d0y = tf.m0.y - o.y;
     let k = ((m.x - o.x) * d0x + (m.y - o.y) * d0y) / Math.max(d0x * d0x + d0y * d0y, 1);
-    k = Math.max(200 / tf.w0, Math.min((W * 0.9) / tf.w0, k));
+    k = Math.max(200 / tf.w0, Math.min(MAX_W / tf.w0, k));
     place.width = tf.w0 * k;
     place.cx = o.x + (tf.c0.x - o.x) * k;
     place.cy = o.y + (tf.c0.y - o.y) * k;
@@ -1364,7 +1383,7 @@ window.__t = {
   option: (b) => window.rugSetOption(b),
   beginTransform: (x, y) => { pointerX = x; pointerY = y; beginTransform(x, y); }, moveTransform: (x, y) => { pointerX = x; pointerY = y; moveTransform(x, y); }, endTransform,
   selNow: () => ({ ...selNow }),
-  selUI: () => selUI(), cornerZone, hover: (x, y) => { pointerX = x; pointerY = y; updateHandles(); },
+  selUI: () => selUI(), cornerZone, loadPlace, maxW: MAX_W, screen: () => [W, H], hover: (x, y) => { pointerX = x; pointerY = y; updateHandles(); },
   tex: (name) => post({ type: 'snap', name, data: surface.canvas.toDataURL('image/png').split(',')[1] }),
   snap: (name, rect) => { snapQueue.push({ name, rect }); needsRender = true; wake(); },
   // 逐帧模式：停掉自动循环，之后每调一次 frame() 走 1/60 秒并画一帧
