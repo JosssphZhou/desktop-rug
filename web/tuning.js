@@ -2,9 +2,5 @@
 // 由 scripts/score/sweep.py 维护完整对象；每次保留前必须通过真实重放和回归。
 export default {
   "optmatch": 0.9375,
-  "foldfric": 4,
-  "damp": 0.9,
-  "fdamp": 0.95,
-  "grabweight": 1.5,
-  "thickness": 0.775
+  "foldfric": 4
 };

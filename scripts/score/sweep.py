@@ -81,6 +81,7 @@ def main():
  parser.add_argument('--cycle',required=True,type=int)
  parser.add_argument('--params',default=','.join(PLAN))
  parser.add_argument('--recheck',action='store_true',help='补充同一整轮中已扫参数的细值，不增加整轮计数')
+ parser.add_argument('--fast-screen',action='store_true',help='仅作初筛；正式收敛轮次不要启用')
  args=parser.parse_args()
  os.chdir(ROOT);CACHE.mkdir(parents=True,exist_ok=True)
  if subprocess.check_output(['git','branch','--show-current'],text=True).strip()!='astra-爬坡':raise RuntimeError('不在授权任务分支')
@@ -92,6 +93,7 @@ def main():
  cycle=state['cycles'].setdefault(str(args.cycle),{'visited':[],'kept':[]})
  def save():state_path.write_text(json.dumps(state,ensure_ascii=False,indent=2)+'\n')
  def evaluate(config,label,fast=True):
+  fast = fast and args.fast_screen
   disk_guard()
   effective={k:config.get(k,v[0]) for k,v in PLAN.items()}
   key=hashlib.sha256(json.dumps([logic,effective,fast],sort_keys=True).encode()).hexdigest()
@@ -154,6 +156,15 @@ def main():
   usable=sorted([r for r in candidates if r['valid'] and eligible(r['score'],base['score']) and all(r['score']['segments'][k]['iou']>=state['baseline']['score']['segments'][k]['iou']-cap for k,cap in CAPS.items())],key=lambda r:r['total'],reverse=True)
   accepted=None
   for candidate in usable:
+   # 同代码同参数曾失败就保持否决，不能反复抽取实时调度直到偶然通过。
+   prior=[]
+   for fast in [False,True]:
+    key=hashlib.sha256(json.dumps([logic,candidate['config'],fast],sort_keys=True).encode()).hexdigest()
+    prior.append(state['cache'].get(key,{}))
+   if any(r.get('regression_rejected') for r in prior):
+    candidate['regression_rejected']=next(r['regression_rejected'] for r in prior if r.get('regression_rejected'))
+    print('同配置已被回归否决，不重复抽取',param,candidate['config'][param],flush=True)
+    continue
    value=candidate['config'][param];cfg=dict(config);cfg[param]=value
    exact=evaluate(cfg,f'{param}-{value:g}-confirm',False)
    if exact['valid']:
