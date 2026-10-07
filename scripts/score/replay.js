@@ -22,7 +22,7 @@
       t.frame();
       log.push({frame: f, down: c.down, x: c.x, y: c.y, state: t.state(), metrics: t.metrics()});
       // 宿主写出这一帧。物理时间始终只前进 1/60 秒。
-      await t.sleep(15);
+      await t.sleep(0);
     }
     console.log('[评分重放] LOG', JSON.stringify(log));
     console.log('[评分重放] COMPLETE 1328');

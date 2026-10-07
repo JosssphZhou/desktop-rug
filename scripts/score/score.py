@@ -248,12 +248,14 @@ def option_score(ref, ours):
             'dots': dots, 'reference': rf, 'candidate': of}
 
 
-def capture(binary, out):
+def capture(binary, out, queries):
     frames = out / 'frames'
     frames.mkdir()
     cmd = [str(binary), '--material', 'persian', '--rug', '1280,780,680',
            '--level', '-2147483648', '--eval-file', str(HERE / 'replay.js'),
            '--snap-dir', str(frames), '--quit-after', '600']
+    for query in queries:
+        cmd.extend(['--q', query])
     # 低于桌面的临时窗口，不抢真鼠标；RUG_ROOT 只读取当前任务工作树资源。
     home = str(ROOT / '.score-cache/home')
     env = dict(os.environ, RUG_ROOT=str(ROOT), HOME=home, CFFIXED_USER_HOME=home)
@@ -300,7 +302,7 @@ def compare(video, frames, cache, ref, out, evidence):
             disk_guard()
             path = frames / f'f{f:04d}.png'
             rgba = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-            if rgba is None or rgba.shape != (1080, 1662, 4):
+            if rgba is None or rgba.shape not in [(1080, 1662, 4), (540, 831, 4)]:
                 raise ValueError(f'重放帧尺寸或透明通道错误：{path}')
             rgba = cv2.resize(rgba, SIZE, interpolation=cv2.INTER_AREA)
             alpha = rgba[..., 3:4].astype(float) / 255
@@ -366,6 +368,7 @@ def main():
     parser.add_argument('--reference', type=Path, default=DEFAULT_VIDEO)
     parser.add_argument('--prepare-reference', action='store_true')
     parser.add_argument('--label', default='candidate')
+    parser.add_argument('--q', action='append', default=[], help='只覆盖本次运行的参数，例如 fric=0.06')
     parser.add_argument('--evidence', action='store_true', help='最终交付时导出60fps并排视频')
     args = parser.parse_args()
     disk_guard()
@@ -377,12 +380,13 @@ def main():
     out = Path(tempfile.mkdtemp(prefix=time.strftime('%Y%m%d-%H%M%S-') + args.label + '-', dir=ROOT / '.score-cache'))
     binary = Path(os.environ['RUG_BIN']).resolve()
     metadata = {'label': args.label, 'commit': subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
-                'rug_sha256': sha(ROOT / 'web/rug.js'), 'host_sha256': sha(binary),
+                'rug_sha256': sha(ROOT / 'web/rug.js'), 'host_sha256': sha(binary), 'queries': args.q,
+                'tuning_sha256': sha(ROOT / 'web/tuning.js') if (ROOT / 'web/tuning.js').exists() else None,
                 'reference_identity': ref['identity'], 'replay_sha256': sha(HERE / 'replay.js')}
     dump(out / 'provenance.json', metadata)
     print(f'运行目录：{out}', flush=True)
     try:
-        frames = capture(binary, out)
+        frames = capture(binary, out, args.q)
         result = compare(args.reference, frames, cache, ref, out, args.evidence)
     finally:
         # 成功、中断、缺帧都清理本次原始截图，用户素材与参考缓存不动。
