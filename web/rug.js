@@ -62,7 +62,7 @@ function screenToPlane(sx, sy, z) {
 }
 
 // ---------- 地毯摆放状态（保存在本地） ----------
-const ASPECT = 2 / 3;
+const ASPECT = 44 / 70;   // 宽高比 1.59，参考视频静止的地毯是 1.598
 function defaultPlacement() {
   return { cx: 0, cy: -H * 0.05, angle: 0, width: Math.min(W * 0.34, 680) };
 }
@@ -79,7 +79,7 @@ if (params.get('rug')) {
 const savePlace = () => { try { localStorage.setItem('rug.place', JSON.stringify(place)); } catch (e) {} };
 
 // ---------- 布料 ----------
-const NX = 84, NY = 56;   // 网格够密，鼓包边上的褶子才画得出来
+const NX = 70, NY = 44;   // 网格是正方形，宽高比 70:44 约等于参考视频里的 1.6
 const N = (NX + 1) * (NY + 1);
 const idx = (i, j) => j * (NX + 1) + i;
 const pos = new Float32Array(N * 3);
@@ -97,6 +97,7 @@ for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
 }
 
 // 约束：结构、剪切、弯曲。长度按宽度为 1 记录，求解时乘以当前宽度。
+const BEND2 = +(params.get('bend2') ?? 0.5), BEND4 = +(params.get('bend4') ?? 0.15);
 const cA = [], cB = [], cL = [], cS = [];
 function addC(a, b, s) {
   const dx = local[a * 2] - local[b * 2], dy = local[a * 2 + 1] - local[b * 2 + 1];
@@ -107,12 +108,21 @@ for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
   if (i < NX) addC(k, idx(i + 1, j), 1);
   if (j < NY) addC(k, idx(i, j + 1), 1);
   if (i < NX && j < NY) { addC(k, idx(i + 1, j + 1), 0.9); addC(idx(i + 1, j), idx(i, j + 1), 0.9); }
-  // 弯曲约束偏硬：厚毯子折起来是圆弧，不会折出尖角
-  if (i < NX - 1) addC(k, idx(i + 2, j), 0.42);
-  if (j < NY - 1) addC(k, idx(i, j + 2), 0.42);
+  // 弯曲约束分两档：隔一格的管小皱，隔三格的管大褶。只有隔一格的话，布一压就皱成一团小褶子，像破布
+  if (i < NX - 1) addC(k, idx(i + 2, j), BEND2);
+  if (j < NY - 1) addC(k, idx(i, j + 2), BEND2);
+  if (BEND4 > 0 && i < NX - 3) addC(k, idx(i + 4, j), BEND4);
+  if (BEND4 > 0 && j < NY - 3) addC(k, idx(i, j + 4), BEND4);
 }
 const CA = Int32Array.from(cA), CB = Int32Array.from(cB), CL = Float32Array.from(cL), CS = Float32Array.from(cS);
 const NC = CA.length;
+const ITER = +(params.get('iter') ?? 8);           // 每个子步里约束迭代的次数
+const FRIC_DRAG = +(params.get('fric') ?? 0.03);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
+const LEASH = +(params.get('leash') ?? 1.25);   // 抓点离周围的点最远不超过静止间距的 1.25 倍
+const MAX_STRAIN = +(params.get('strain') ?? 1.04);  // 最大伸长：布不能被拉长，最多比静止长度长 4%
+const LIM = Int32Array.from(Array.from({ length: NC }, (_, c) => c).filter((c) => CS[c] >= 0.5));
+const NLIM = LIM.length;
+const LRA = +(params.get('lra') ?? 1.01);   // 长程牵引的松量，0 表示关掉
 
 function computeRest() {
   const c = Math.cos(place.angle), s = Math.sin(place.angle), w = place.width;
@@ -216,21 +226,23 @@ snapToRest();
 // 物理阶段：idle 静止休眠（可能停在叠起的样子），drag 被抓着，falling 松手后按重力落下直到停住，restoring 只在双击或菜单放平时摊平回原位
 let phase = 'idle';
 let phaseT = 0;
-let calmFrames = 0;
+let calmMs = 0;
 let grabK = -1;
 let grabTarget = null;
+let grabZ0 = 0;
 let grabStart = null;
 let releasedAt = 0;
 const GRAVITY = 4200;   // 比丝巾重：下落快，不飘
-const LAYER = 1.5;   // 翻过来那一层的正面离底下一层的距离；厚度另由背面偏移体现
+const thick = () => Math.min(Math.max(place.width * 0.003, 1.2), 2.5);   // 参考视频里的布很薄，叠层只多几个像素
+const LAYER = () => thick() + 0.5;   // 翻过来那一层的正面离底下一层的距离，至少比厚度多一点
 
 function updateFloor() {
-  for (let k = 0; k < N; k++) floorZ[k] = bumpAt(pos[k * 3], pos[k * 3 + 1]) + (flipped[k] ? LAYER : 0);
+  for (let k = 0; k < N; k++) floorZ[k] = bumpAt(pos[k * 3], pos[k * 3 + 1]) + (flipped[k] ? LAYER() : 0);
 }
 
-function step(dt, restoreK) {
+function step(dt, restoreK, curlK = 0, extraDamp = 1) {
   const g = GRAVITY * dt * dt;
-  const damp = restoreK > 0 ? 0.9 : 0.965;   // 阻尼大，落地后很快停住
+  const damp = Math.pow(restoreK > 0 ? 0.9 : 0.965, dt * 120) * (extraDamp < 1 ? Math.pow(extraDamp, dt * 120) : 1);   // 以 120 Hz 子步为基准，和帧率无关
   for (let k = 0; k < N; k++) {
     if (inv[k] === 0) continue;
     const o = k * 3;
@@ -245,6 +257,12 @@ function step(dt, restoreK) {
       ax = dx * kk; ay = dy * kk;
       if (d > 2) az = (Math.min(d * 0.5, 150) + floorZ[k] - pos[o + 2]) * kk;
     }
+    if (curlK > 0 && !flipped[k]) {
+      // 没翻过去、离原位不远的小翘角：慢慢放平（参考视频里翘角约 0.3 到 0.7 秒缓缓落下，没有来回弹）
+      const dx = rest[k * 2] - pos[o], dy = rest[k * 2 + 1] - pos[o + 1], dz = floorZ[k] - pos[o + 2];
+      const lim = place.width * 0.10;
+      if (Math.hypot(dx, dy) < lim && -dz < lim * 0.8) { const kk = curlK * dt * dt; ax += dx * kk; ay += dy * kk; az += dz * kk * 0.5; }
+    }
     pos[o] += vx + ax; pos[o + 1] += vy + ay; pos[o + 2] += vz + az;
   }
   if (grabK >= 0 && grabTarget) {
@@ -256,7 +274,7 @@ function step(dt, restoreK) {
     prev[o] = pos[o]; prev[o + 1] = pos[o + 1]; prev[o + 2] = pos[o + 2];
   }
   const w = place.width;
-  for (let it = 0; it < 12; it++) {
+  for (let it = 0; it < ITER; it++) {
     for (let c = 0; c < NC; c++) {
       const a = CA[c] * 3, b = CB[c] * 3;
       const wa = inv[CA[c]], wb = inv[CB[c]], ws = wa + wb;
@@ -268,18 +286,70 @@ function step(dt, restoreK) {
       pos[b] -= dx * s * wb; pos[b + 1] -= dy * s * wb; pos[b + 2] -= dz * s * wb;
     }
     // 地面碰撞和摩擦
-    if (it % 3 === 2 || it === 11) {
+    if (it === 1 || it === ITER - 1) {
       for (let k = 0; k < N; k++) {
         const o = k * 3;
         if (pos[o + 2] < floorZ[k] + 0.5) {
           if (pos[o + 2] < floorZ[k]) pos[o + 2] = floorZ[k];
           // 贴地的点有摩擦：收回这一步大部分水平位移，地毯不会被拖着整块滑走
           if (restoreK === 0 && inv[k] > 0) {
-            pos[o] = prev[o] + (pos[o] - prev[o]) * 0.35;
-            pos[o + 1] = prev[o + 1] + (pos[o + 1] - prev[o + 1]) * 0.35;
+            let fx = pos[o] - prev[o], fy = pos[o + 1] - prev[o + 1];
+            if (phase === 'drag') {
+              // 抓着拖时是库仑摩擦：每步只扣掉固定的一小段滑动，拉得动就整块跟着走，没被拉的部分贴着不动
+              const m = Math.hypot(fx, fy), cut = Math.min(m, FRIC_DRAG * place.width / 680);
+              if (m > 1e-9) { fx *= (m - cut) / m; fy *= (m - cut) / m; }
+            } else { fx *= 0.35; fy *= 0.35; }   // 松手后摩擦大，布停在原地
+            pos[o] = prev[o] + fx;
+            pos[o + 1] = prev[o + 1] + fy;
           }
         }
       }
+    }
+  }
+  // 抓点的「牵绳」：布拖不动时，手拽着的那个点落在鼠标后面，不把布在抓点周围拉成长长的尖角
+  if (grabK >= 0 && phase === 'drag') {
+    const gi = grabK % (NX + 1), gj = (grabK / (NX + 1)) | 0;
+    for (let q = 0; q < 3; q++) {
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+        if (!di && !dj) continue;
+        const ni = gi + di, nj = gj + dj;
+        if (ni < 0 || nj < 0 || ni > NX || nj > NY) continue;
+        const n = idx(ni, nj) * 3, g0 = grabK * 3;
+        const Lr = Math.hypot(di, dj) * (place.width / NX) * LEASH;   // 网格间距近似；横纵间距略有不同，取平均
+        const dx = pos[n] - pos[g0], dy = pos[n + 1] - pos[g0 + 1], dz = pos[n + 2] - pos[g0 + 2];
+        const d = Math.hypot(dx, dy, dz);
+        if (d > Lr) { const f = (d - Lr) / d; pos[g0] += dx * f * 0.5; pos[g0 + 1] += dy * f * 0.5; pos[g0 + 2] += dz * f * 0.5; }
+      }
+    }
+    const g0 = grabK * 3; prev[g0] = pos[g0]; prev[g0 + 1] = pos[g0 + 1]; prev[g0 + 2] = pos[g0 + 2];
+  }
+  // 长程牵引：任何一点离抓点的直线距离都不能超过两点在布上的距离。拉的时候整块布立刻跟着走，
+  // 不会只有抓点附近被拉长，远处还留在原地
+  if (grabK >= 0 && phase === 'drag' && LRA) {
+    const g0 = grabK * 3, gx = local[grabK * 2], gy = local[grabK * 2 + 1];
+    for (let k = 0; k < N; k++) {
+      if (inv[k] === 0) continue;
+      const o = k * 3;
+      const L = Math.hypot(local[k * 2] - gx, local[k * 2 + 1] - gy) * w * LRA;
+      const dx = pos[g0] - pos[o], dy = pos[g0 + 1] - pos[o + 1], dz = pos[g0 + 2] - pos[o + 2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d > L) { const f = (d - L) / d; pos[o] += dx * f; pos[o + 1] += dy * f; pos[o + 2] += dz * f; }
+    }
+  }
+  // 限制最大伸长：布不能被拉长。结构约束和剪切约束超过 MAX_STRAIN 就直接拉回，这样拖得再猛也不会拉成橡皮
+  for (let pass = 0; pass < 2; pass++) {
+    for (let q = 0; q < NLIM; q++) {
+      const c = LIM[q];
+      const a = CA[c] * 3, b = CB[c] * 3;
+      const wa = inv[CA[c]], wb = inv[CB[c]], ws = wa + wb;
+      if (ws === 0) continue;
+      const dx = pos[b] - pos[a], dy = pos[b + 1] - pos[a + 1], dz = pos[b + 2] - pos[a + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+      const L = CL[c] * w * MAX_STRAIN;
+      if (d <= L) continue;
+      const s = (d - L) / (d * ws);
+      pos[a] += dx * s * wa; pos[a + 1] += dy * s * wa; pos[a + 2] += dz * s * wa;
+      pos[b] -= dx * s * wb; pos[b + 1] -= dy * s * wb; pos[b + 2] -= dz * s * wb;
     }
   }
 }
@@ -307,7 +377,7 @@ function refitPlacement() {
   const ncx = mx - (lx * c - ly * s), ncy = my - (lx * s + ly * c);
   // 只是掀了一下、整体没怎么动时落回原位；真的拖走了才认新位置
   let da = angle - place.angle; da = Math.atan2(Math.sin(da), Math.cos(da));
-  if (Math.abs(da) < 0.12 && Math.hypot(ncx - place.cx, ncy - place.cy) < place.width * 0.06) return;
+  if (Math.abs(da) < 0.02 && Math.hypot(ncx - place.cx, ncy - place.cy) < place.width * 0.01) return;
   place.angle = angle;
   place.cx = ncx;
   place.cy = ncy;
@@ -379,7 +449,6 @@ backMat.onBeforeCompile = (shader) => {
 };
 
 // 厚度：正面在布料点上，背面沿法线往下偏移一个厚度，四周再补一圈侧边
-const thick = () => place.width * 0.009;
 const backPos = new Float32Array(N * 3);
 const backGeo = new THREE.BufferGeometry();
 const backAttr = new THREE.BufferAttribute(backPos, 3);
@@ -529,9 +598,9 @@ function deformedHull(pad = 10) {
   const cx = h.reduce((a, p) => a + p[0], 0) / h.length, cy = h.reduce((a, p) => a + p[1], 0) / h.length;
   return h.map(([x, y]) => { const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy) || 1; return [x + (dx / d) * pad, y + (dy / d) * pad]; });
 }
-// 点击穿透用的网格：只有贴着桌面的三角形算「地毯在这里」。掀起离地的部分、地毯移开后露出来的桌面都放行，
-// 这样掀开一角后，文件可以从掀起的那块布下面拖进去
-const MASK_CELL = 6, GROUND_EPS = 9;
+// 点击穿透用的网格：布面三角形在屏幕上的投影算「地毯在这里」，地毯被掀走后露出来的桌面放行，
+// 这样掀开一角后，文件可以拖进露出来的那块桌面
+const MASK_CELL = 6;
 let maskDirty = false;
 function postMask() {
   const mw = Math.ceil(W / MASK_CELL), mh = Math.ceil(H / MASK_CELL);
@@ -541,7 +610,7 @@ function postMask() {
   for (let k = 0; k < N; k++) {
     const [x, y] = toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
     sp[k * 2] = x / MASK_CELL; sp[k * 2 + 1] = y / MASK_CELL;
-    gr[k] = pos[k * 3 + 2] - floorZ[k] < GROUND_EPS ? 1 : 0;
+    gr[k] = 1;   // 所有可见的布面都算，悬空的折角也能被抓住
   }
   const bytes = new Uint8Array(mw * mh);
   let on = 0;
@@ -600,6 +669,7 @@ function updateHandles() {
 let mode = null;    // 'cloth' 掀布，'transform' Option 缩放旋转或移动
 let tf = null;
 let needsRender = true;
+const snapQueue = [];
 
 function pointInPoly(x, y, pts) {
   let inside = false;
@@ -625,6 +695,7 @@ function beginGrab(sx, sy) {
   inv[grabK] = 0;
   grabStart = [sx, sy];
   grabTarget = new THREE.Vector3(pos[best * 3], pos[best * 3 + 1], pos[best * 3 + 2]);
+  grabZ0 = pos[best * 3 + 2];   // 抓到的那一刻布离桌面多高，鼠标没动之前不再抬
   phase = 'drag';
   mode = 'cloth';
   moveGrab(sx, sy);
@@ -633,20 +704,30 @@ function beginGrab(sx, sy) {
 function moveGrab(sx, sy) {
   if (grabK < 0 || !grabStart) return;
   const dist = Math.hypot(sx - grabStart[0], sy - grabStart[1]);
-  const lift = Math.min(18 + dist * 0.38, 170);
-  const p = screenToPlane(sx, sy, lift);
-  if (p) grabTarget.copy(p);
+  // 6 点死区：鼠标还没明显移动时布不抬；之后每移动 1 点抬 0.16 点，最多抬到毯宽的 10%
+  const lift = Math.min(Math.max(dist - 6, 0) * 0.16, place.width * 0.1);
+  const p = screenToPlane(sx, sy, grabZ0 + lift);
+  if (!p) return;
+  // 把布拖回它原来的位置附近（32 点内）时逐渐放低，盖回去不会悬在半空
+  const dr = Math.hypot(p.x - rest[grabK * 2], p.y - rest[grabK * 2 + 1]);
+  if (dr < 32) {
+    const t = dr / 32, base = floorZ[grabK];
+    p.z = base + (grabZ0 + lift - base) * t;
+  }
+  grabTarget.copy(p);
 }
 function endGrab() {
   if (grabK >= 0) inv[grabK] = 1;
   grabK = -1; grabTarget = null;
-  phase = 'falling'; phaseT = 0; calmFrames = 0;
+  refitPlacement();   // 拖着滑走的布以现在的位置为准，不拉回老地方
+  phase = 'falling'; phaseT = 0; calmMs = 0;
   mode = null;
   releasedAt = performance.now();
 }
 
 function beginTransform(sx, sy) {
-  if (phase !== 'idle' || deformed) { refitPlacement(); snapToRest(); phase = 'idle'; }
+  if (phase === 'falling') { phase = 'idle'; deformed = true; maskDirty = true; }   // 变形时布停在现在的样子
+  else if (phase === 'restoring') { snapToRest(); phase = 'idle'; }
   const cs = cornersScreen();
   const nearCorner = cs.some(([x, y]) => Math.hypot(x - sx, y - sy) < 30);
   const m = toWorld(sx, sy);
@@ -657,8 +738,21 @@ function beginTransform(sx, sy) {
   };
   mode = 'transform';
 }
+// 布叠着时，把整块布（位置、上一步位置、静止位置）跟着摆放的变化一起平移、旋转、缩放
+function applyPlaceDelta(a, b) {
+  const dA = b.angle - a.angle, c = Math.cos(dA), s = Math.sin(dA), r = b.width / a.width;
+  for (const arr of [pos, prev]) {
+    for (let k = 0; k < N; k++) {
+      const o = k * 3, x = arr[o] - a.cx, y = arr[o + 1] - a.cy;
+      arr[o] = b.cx + (x * c - y * s) * r;
+      arr[o + 1] = b.cy + (x * s + y * c) * r;
+      arr[o + 2] *= r;
+    }
+  }
+}
 function moveTransform(sx, sy) {
   const m = toWorld(sx, sy);
+  const before = { ...place };
   if (tf.kind === 'move') {
     place.cx = tf.c0.x + (m.x - tf.m0.x);
     place.cy = tf.c0.y + (m.y - tf.m0.y);
@@ -667,7 +761,8 @@ function moveTransform(sx, sy) {
     place.angle = tf.a0 + Math.atan2(v.y, v.x) - Math.atan2(tf.v0.y, tf.v0.x);
     place.width = Math.max(200, Math.min(W * 0.9, (tf.w0 * v.length()) / Math.max(tf.v0.length(), 1)));
   }
-  snapToRest();
+  if (deformed) { applyPlaceDelta(before, place); computeRest(); maskDirty = true; }
+  else snapToRest();
   needsRender = true;
 }
 function endTransform() { mode = null; tf = null; savePlace(); }
@@ -701,7 +796,13 @@ const up = () => {
   post({ type: 'drag', active: false });
   cv.style.cursor = 'grab';
 };
-cv.addEventListener('dblclick', () => { flatten(); });
+// 双击摊平：两次点击都几乎没动（4 点内）才算，抓住折角拖几下不会被当成双击
+let downX0 = 0, downY0 = 0, movedMax = 0;
+const clickStatic = [true, true];
+cv.addEventListener('pointerdown', (e) => { downX0 = e.clientX; downY0 = e.clientY; movedMax = 0; }, true);
+cv.addEventListener('pointermove', (e) => { movedMax = Math.max(movedMax, Math.hypot(e.clientX - downX0, e.clientY - downY0)); });
+cv.addEventListener('pointerup', () => { clickStatic.shift(); clickStatic.push(movedMax <= 4); });
+cv.addEventListener('dblclick', () => { if (clickStatic[0] && clickStatic[1] && !optionDown) flatten(); });
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
 
@@ -732,33 +833,43 @@ function loop(t) {
   phaseT += dtFrame;
 
   if (phase !== 'idle') {
-    const restoreK = phase === 'restoring' ? Math.min(phaseT / 0.2, 1) * (phaseT > 1.6 ? 300 : 115) : 0;
+    // 摊平时刚度在 0.25 秒内平滑升到 100，再平滑升到 300，没有突然跳变
+    const ramp = (a, b) => { const x = Math.min(Math.max((phaseT - a) / (b - a), 0), 1); return x * x * (3 - 2 * x); };
+    const restoreK = phase === 'restoring' ? ramp(0, 0.25) * (100 + 200 * ramp(1.2, 2.7)) : 0;
+    const curlK = phase === 'falling' && phaseT > 0.12 ? 12 : 0;
+    const extraDamp = phase === 'falling' && phaseT > 3 ? 0.97 : 1;   // 3 秒还没停稳就加大阻尼，不强行结束
     updateFloor();
-    const SUB = 2;
-    for (let s = 0; s < SUB; s++) step(dtFrame / SUB, restoreK);
+    const SUB = +(params.get('sub') ?? 3);
+    for (let s = 0; s < SUB; s++) step(dtFrame / SUB, restoreK, curlK, extraDamp);
     // 用上一帧的法线判断哪些点翻过去了
     const nrm = geo.attributes.normal.array;
-    let flips = 0;
-    for (let k = 0; k < N; k++) { const f = nrm[k * 3 + 2] < -0.15 ? 1 : 0; if (f !== flipped[k]) flips++; flipped[k] = f; }
-    window.__flips = flips;
+    let flipCount = 0;
+    for (let k = 0; k < N; k++) { const f = nrm[k * 3 + 2] < -0.15 ? 1 : 0; flipCount += f; flipped[k] = f; }
     if (phase === 'falling') {
-      // 松手后只受重力：最快的点几乎不动了就算停稳，布留在落下来的样子
-      let vmax = 0;
+      // 松手后只受重力。按速度（点每秒）判断停稳：95% 的点慢于 8S，最快的慢于 30S，连续 250 毫秒，
+      // 且松手至少 300 毫秒。S 是毯宽相对 680 点的比例。不再有无条件结束
+      const S = place.width / 680, sub = dtFrame / SUB;
+      let vmax = 0, fast = 0, cnt = 0;
       for (let k = 0; k < N; k++) {
         if (inv[k] === 0) continue;
         const o = k * 3;
-        const v = Math.abs(pos[o] - prev[o]) + Math.abs(pos[o + 1] - prev[o + 1]) + Math.abs(pos[o + 2] - prev[o + 2]);
+        const v = Math.hypot(pos[o] - prev[o], pos[o + 1] - prev[o + 1], pos[o + 2] - prev[o + 2]) / sub;
         if (v > vmax) vmax = v;
+        if (v > 8 * S) fast++;
+        cnt++;
       }
-      if (params.get('debug') && (frameCount % 10) === 0) console.log('落下', phaseT.toFixed(2), 'vmax', vmax.toFixed(3), '翻面变化点数', window.__flips);
-      calmFrames = vmax < 0.6 * (dtFrame * 60) ? calmFrames + 1 : 0;
-      if ((calmFrames > 6 && phaseT > 0.25) || phaseT > 3) {
+      const calm = vmax < 30 * S && fast < cnt * 0.05;
+      calmMs = calm ? calmMs + dtFrame * 1000 : 0;
+      if (params.get('debug') && (frameCount % 10) === 0) console.log('落下', phaseT.toFixed(2), 'vmax', vmax.toFixed(1), '快点比例', (fast / cnt).toFixed(3), '翻面点数', flipCount);
+      if ((calmMs >= 250 && phaseT >= 0.3) || phaseT > 14) {
         let maxD = 0;
         for (let k = 0; k < N; k++) {
           const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
           if (d > maxD) maxD = d;
         }
-        if (maxD < 3) snapToRest(); else { deformed = true; maskDirty = true; }   // 几乎还是平的就吸附回去，免得留下看不出来的歪斜
+        // 没有翻面、所有点离原位 3 点内才吸附回平铺，免得留下看不出来的歪斜；叠着的布不会被吸附
+        if (maxD < 3 * S && flipCount === 0) snapToRest(); else { deformed = true; maskDirty = true; }
+        for (let k = 0; k < N * 3; k++) prev[k] = pos[k];
         phase = 'idle';
         console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', deformed ? '停在掀起的样子' : '平整');
       }
@@ -769,7 +880,7 @@ function loop(t) {
         const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
         if (d > maxD) maxD = d;
       }
-      if (maxD < 1.2 || phaseT > 4) { snapToRest(); phase = 'idle'; console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms'); }
+      if (maxD < 1.2 || phaseT > 5) { snapToRest(); phase = 'idle'; console.log('放平用时', (performance.now() - releasedAt).toFixed(0) + 'ms'); }
     }
     needsRender = true;
   }
@@ -796,6 +907,17 @@ function loop(t) {
     renderer.render(scene, camera);
     needsRender = false;
   }
+  if (snapQueue.length) {
+    // 调试截图：截地毯周围一块，底色用木地板色
+    const [cx, cy] = toScreen(place.cx, place.cy, 0), dpr = renderer.getPixelRatio();
+    const rw = Math.round(Math.min(W, place.width * 1.7)), rh = Math.round(Math.min(H, place.width * 1.2));
+    const rx = Math.max(0, Math.min(W - rw, cx - rw / 2)), ry = Math.max(0, Math.min(H - rh, cy - rh / 2));
+    const out = document.createElement('canvas'); out.width = rw; out.height = rh;
+    const g = out.getContext('2d');
+    g.fillStyle = '#b98f68'; g.fillRect(0, 0, rw, rh);
+    g.drawImage(renderer.domElement, rx * dpr, ry * dpr, rw * dpr, rh * dpr, 0, 0, rw, rh);
+    for (const name of snapQueue.splice(0)) post({ type: 'snap', name, data: out.toDataURL('image/png').split(',')[1] });
+  }
   if (recorder) recorder.draw();
   publishHit();
   updateHandles();
@@ -819,7 +941,7 @@ window.rugSetIcons = (list) => {
   buildStacks();
   // 图标位置更新不能把用户叠好的布清掉：平铺时直接吸附到新的鼓包，叠着时让布按重力重新落稳
   if (phase === 'idle' && !deformed) snapToRest();
-  else if (phase !== 'drag') { phase = 'falling'; phaseT = 0; calmFrames = 0; }
+  else if (phase !== 'drag') { phase = 'falling'; phaseT = 0; calmMs = 0; }
   wake();
 };
 window.__testMove = () => {
@@ -1042,3 +1164,26 @@ if (params.get('pose') === 'fold') {
   }, 600);
 }
 if (params.get('demo')) { if (!params.get('rug')) window.rugReset(); setTimeout(() => window.rugDemo(), 800); }
+
+// ---------- 调试用接口：脚本驱动抓取并量布的状态（--eval-file 用） ----------
+window.__t = {
+  beginGrab: (x, y) => { const r = beginGrab(x, y); touchLive(); return r; }, moveGrab, endGrab: () => { endGrab(); wake(); }, cornersScreen, sleep, glide, lerp2, waitIdle,
+  flatten: () => flatten(),
+  snap: (name) => { snapQueue.push(name); needsRender = true; wake(); },
+  quit: () => post({ type: 'quit' }),
+  state: () => ({ phase, deformed, place: { ...place } }),
+  info: () => ({ grabK, target: grabTarget && grabTarget.toArray(), p: Array.from(pos.slice(grabK * 3, grabK * 3 + 3)), inv: inv[grabK] }),
+  metrics() {
+    // 最大伸长比（相邻点距离相对静止长度）、被折得很陡的点所占比例、翻面点数
+    let maxStretch = 0, sum = 0, nrm = geo.attributes.normal.array, steep = 0, flips = 0;
+    for (let c = 0; c < NC; c++) {
+      if (CS[c] < 0.5) continue;
+      const a = CA[c] * 3, b = CB[c] * 3;
+      const d = Math.hypot(pos[a] - pos[b], pos[a + 1] - pos[b + 1], pos[a + 2] - pos[b + 2]) / (CL[c] * place.width);
+      if (d > maxStretch) maxStretch = d;
+      sum += d;
+    }
+    for (let k = 0; k < N; k++) { if (Math.abs(nrm[k * 3 + 2]) < 0.7) steep++; if (nrm[k * 3 + 2] < -0.15) flips++; }
+    return { maxStretch: +maxStretch.toFixed(3), steepFrac: +(steep / N).toFixed(3), flips };
+  },
+};

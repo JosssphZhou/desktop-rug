@@ -19,6 +19,8 @@ struct Options {
     var alwaysRender = false
     var testMenu = false
     var sweep = false
+    var evalFile: String? = nil   // 调试：页面加载后执行这个脚本文件
+    var snapDir: String? = nil    // 调试：脚本里截的图写到这个目录
     var level: Int? = nil   // 调试用：直接指定窗口层级的数值
     var reset = false
     var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
@@ -41,10 +43,13 @@ struct Options {
             case "--always-render": alwaysRender = true
             case "--test-menu": testMenu = true
             case "--test-sweep": sweep = true
+            case "--eval-file": evalFile = next(); alwaysRender = true
+            case "--snap-dir": snapDir = next()
             case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
             case "--plain": extraQuery.append("plain=1")
             case "--debug": extraQuery.append("debug=1")
+            case "--q": if let kv = next() { extraQuery.append(kv) }   // 调试：直接给网页加一个查询参数，如 --q fric=0.02
             default: break
             }
             i += 1
@@ -208,6 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 self.webView.evaluateJavaScript("window.__testMove && window.__testMove()")
             }
         }
+        if let f = options.evalFile, let src = try? String(contentsOfFile: f, encoding: .utf8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.webView.evaluateJavaScript(src) }
+        }
         if options.selfTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.runSelfTest() }
         }
@@ -315,6 +323,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     let got = inHitArea(CGPoint(x: x, y: y))
                     log("宿主点击判断 \(name) (\(Int(x)),\(Int(y)))：\(got ? "接收鼠标" : "穿透") \(got == (e == 1) ? "通过" : "不通过")")
                 }
+            }
+        case "snap":
+            if let dir = options.snapDir, let name = body["name"] as? String, let b64 = body["data"] as? String, let data = Data(base64Encoded: b64) {
+                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                try? data.write(to: URL(fileURLWithPath: dir + "/" + name + ".png"))
             }
         case "sweepDone":
             if options.sweep { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) } }
