@@ -531,7 +531,7 @@ function deformedHull(pad = 10) {
 }
 // 点击穿透用的网格：只有贴着桌面的三角形算「地毯在这里」。掀起离地的部分、地毯移开后露出来的桌面都放行，
 // 这样掀开一角后，文件可以从掀起的那块布下面拖进去
-const MASK_CELL = 12, GROUND_EPS = 7;
+const MASK_CELL = 6, GROUND_EPS = 9;
 let maskDirty = false;
 function postMask() {
   const mw = Math.ceil(W / MASK_CELL), mh = Math.ceil(H / MASK_CELL);
@@ -817,7 +817,10 @@ window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest();
 window.rugSetIcons = (list) => {
   icons = list.map(([x, y]) => { const p = toWorld(x, y); return { x: p.x, y: p.y }; });
   buildStacks();
-  snapToRest(); phase = 'falling'; phaseT = 0; wake();
+  // 图标位置更新不能把用户叠好的布清掉：平铺时直接吸附到新的鼓包，叠着时让布按重力重新落稳
+  if (phase === 'idle' && !deformed) snapToRest();
+  else if (phase !== 'drag') { phase = 'falling'; phaseT = 0; calmFrames = 0; }
+  wake();
 };
 window.__testMove = () => {
   // 测试 Option 拖中间移动：从地毯中心往右下拖 (60, 40) 点
