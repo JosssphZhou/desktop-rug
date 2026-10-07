@@ -9,7 +9,7 @@
 <br>
 <br>
 
-[![Download](https://img.shields.io/badge/Download-0.1.1-b5272f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/JosssphZhou/desktop-rug/releases/latest)
+[![Download](https://img.shields.io/badge/Download-0.1.2-b5272f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/JosssphZhou/desktop-rug/releases/latest)
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-1c2a52?style=flat-square)
 ![Apple silicon](https://img.shields.io/badge/Apple%20silicon-arm64-1c2a52?style=flat-square)
@@ -40,7 +40,7 @@ Clicks outside the rug go straight through to your desktop.
 
 ## Install
 
-1. Download **DesktopRug-0.1.1.zip** from [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest).
+1. Download **DesktopRug-0.1.2.zip** from [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest).
 2. Unzip it and drag **Desktop Rug.app** into Applications.
 3. Open it. The app lives in the menu bar, not the Dock.
 

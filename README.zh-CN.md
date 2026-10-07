@@ -9,7 +9,7 @@
 <br>
 <br>
 
-[![下载](https://img.shields.io/badge/下载-0.1.1-b5272f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/JosssphZhou/desktop-rug/releases/latest)
+[![下载](https://img.shields.io/badge/下载-0.1.2-b5272f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/JosssphZhou/desktop-rug/releases/latest)
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-1c2a52?style=flat-square)
 ![Apple 芯片](https://img.shields.io/badge/Apple%20芯片-arm64-1c2a52?style=flat-square)
@@ -40,7 +40,7 @@
 
 ## 安装
 
-1. 在 [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest) 下载 **DesktopRug-0.1.1.zip**。
+1. 在 [Releases](https://github.com/JosssphZhou/desktop-rug/releases/latest) 下载 **DesktopRug-0.1.2.zip**。
 2. 解压，把 **Desktop Rug.app** 拖进「应用程序」。中文系统里它显示为「桌面地毯」。
 3. 打开。它只在菜单栏出现，不在程序坞里。
 
