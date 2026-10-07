@@ -133,6 +133,8 @@ export function createSurface(id) {
     animated: def.speed !== 0,
     // 静态材质的 noise 贴图异步加载，前一秒多刷新几次
     warmupMs: def.warmup ? 3000 : 1500,
+    // 暂停：速度设为 0，ShaderMount 会取消自己的逐帧渲染循环，GPU 就空闲了
+    setLive(on) { if (def.speed !== 0) mount.setSpeed(on ? def.speed : 0); },
     dispose() { mount.dispose(); host.remove(); },
   };
 }

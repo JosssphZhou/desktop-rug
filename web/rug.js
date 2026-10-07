@@ -449,6 +449,8 @@ function setMaterial(id) {
   frontMat.map = backMat.map = params.get('plain') ? null : surfaceTex;   // plain=1 时用纯色布检查光照
   frontMat.needsUpdate = backMat.needsUpdate = true;
   surfaceBorn = performance.now();
+  liveUntil = surfaceBorn + LIVE_MS;
+  surfaceLive = true;
   needsRender = true;
   post({ type: 'material', id });
 }
@@ -680,9 +682,10 @@ cv.addEventListener('pointerdown', (e) => {
   if (e.altKey || optionDown) beginTransform(e.clientX, e.clientY);
   else if (!beginGrab(e.clientX, e.clientY)) { post({ type: 'drag', active: false }); return; }
   cv.style.cursor = mode === 'transform' ? 'move' : 'grabbing';
-  wake();
+  touchLive();
 });
 cv.addEventListener('pointermove', (e) => {
+  if (performance.now() > liveUntil - LIVE_MS * 0.5) touchLive();   // 鼠标停在地毯上时材质保持流动
   if (mode === 'cloth') moveGrab(e.clientX, e.clientY);
   else if (mode === 'transform') moveTransform(e.clientX, e.clientY);
 });
@@ -710,6 +713,10 @@ window.rugFlatten = flatten;
 let lastT = performance.now();
 let frameCount = 0, fpsT = lastT, fps = 0;
 let running = false;
+let liveUntil = 0;
+let surfaceLive = true;   // 动态材质现在是否在自己逐帧渲染
+const LIVE_MS = 4000;
+function touchLive() { liveUntil = performance.now() + LIVE_MS; wake(); }
 function wake() { needsRender = true; if (!running) { running = true; lastT = performance.now(); requestAnimationFrame(loop); } }
 
 function loop(t) {
@@ -758,7 +765,10 @@ function loop(t) {
     needsRender = true;
   }
 
-  const animated = surface && (surface.animated || t - surfaceBorn < surface.warmupMs);
+  // 动态材质只在有人碰地毯（掀、拖、鼠标停在上面）后的几秒里动，之后停下来不再渲染，省电
+  const wantLive = !!(surface && surface.animated && (t < liveUntil || recorder || demoRunning));
+  if (surface && surface.setLive && wantLive !== surfaceLive) { surface.setLive(wantLive); surfaceLive = wantLive; if (!wantLive) { surfaceTex.needsUpdate = true; needsRender = true; } }
+  const animated = surface && (wantLive || t - surfaceBorn < surface.warmupMs);
   // 动态材质在地毯静止时按 30 帧刷新，省一半耗电；拖动和录制时每帧都刷新
   if (animated && (phase !== 'idle' || mode !== null || recorder || (frameCount & 1) === 0)) { surfaceTex.needsUpdate = true; needsRender = true; }
   if (recorder) needsRender = true;   // 录制时每帧都画，否则录到被清空的画布
@@ -792,7 +802,7 @@ function loop(t) {
 
 // ---------- 宿主调用的接口 ----------
 window.rugSetOption = (b) => { optionDown = b; needsRender = true; publishHit(); updateHandles(); };
-window.rugSetMaterial = (id) => { setMaterial(id); wake(); };
+window.rugSetMaterial = (id) => { setMaterial(id); touchLive(); };
 window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };   // 放回屏幕中间，同时摊平
 window.rugSetIcons = (list) => {
   icons = list.map(([x, y]) => { const p = toWorld(x, y); return { x: p.x, y: p.y }; });
