@@ -1,0 +1,20 @@
+{
+  "name": "desktop-rug",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@paper-design/shaders": "^0.0.81",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@paper-design/shaders-react": "^0.0.81"
+  }
+}
