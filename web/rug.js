@@ -120,7 +120,7 @@ for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
 const CA = Int32Array.from(cA), CB = Int32Array.from(cB), CL = Float32Array.from(cL), CS = Float32Array.from(cS);
 const NC = CA.length;
 const ITER = +(params.get('iter') ?? 8);           // 每个子步里约束迭代的次数
-const FRIC_DRAG = +(params.get('fric') ?? 0.06);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
+const FRIC_DRAG = +(params.get('fric') ?? 0.09);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
 const LEASH = +(params.get('leash') ?? 1.25);   // 抓点离周围的点最远不超过静止间距的 1.25 倍
 const STICK = +(params.get('stick') ?? 40);   // 松手后贴地的点慢于每秒 40 点（毯宽 680 为基准）就粘住不动
 const SPASS = +(params.get('spass') ?? 12);   // 限制伸长的遍数：2 遍时猛拖仍会局部拉长 15% 以上，12 遍压到 9% 以内
