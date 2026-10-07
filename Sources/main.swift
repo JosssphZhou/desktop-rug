@@ -227,18 +227,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     // MARK: 点击穿透
 
     func tick() {
-        let flags = NSEvent.modifierFlags
-        let opt = flags.contains(.option)
-        if opt != optionDown {
-            optionDown = opt
-            webView.evaluateJavaScript("window.rugSetOption && window.rugSetOption(\(opt))")
+        let p = NSEvent.mouseLocation
+        let f = window.frame
+        let local = CGPoint(x: p.x - f.minX, y: f.height - (p.y - f.minY))
+        // 按住 Option 且鼠标在地毯上时选中地毯；在别的应用里按 Option 不会惊动地毯
+        let opt = NSEvent.modifierFlags.contains(.option)
+        let want = opt && (optionDown || dragging || inHitArea(local))
+        if want != optionDown {
+            optionDown = want
+            webView.evaluateJavaScript("window.rugSetOption && window.rugSetOption(\(want))")
         }
         if dragging { setAccept(true); return }
         // 鼠标已经按着（在别处开始的拖动）时不改变状态，免得半路抢走桌面的拖动
         if NSEvent.pressedMouseButtons != 0 { return }
-        let p = NSEvent.mouseLocation
-        let f = window.frame
-        let local = CGPoint(x: p.x - f.minX, y: f.height - (p.y - f.minY))
         setAccept(inHitArea(local))
     }
 

@@ -17,7 +17,7 @@ import {
 const NOISE = getShaderNoiseTexture();
 await NOISE.decode();
 
-// 贴图的 CSS 尺寸，3:2。ShaderMount 按设备像素比放大，实际约 1800x1200。
+// 贴图的 CSS 尺寸，3:2（参考视频选中拉直时布面是 1.52，静止时布面略松，约 1.6）。ShaderMount 按设备像素比放大，实际约 1800x1200。
 export const TEX_W = 900;
 export const TEX_H = 600;
 
@@ -142,122 +142,173 @@ export function createSurface(id) {
 // MARK: 波斯纹样（Canvas 2D 程序生成，静态）
 
 function persianSurface() {
+  // 按参考视频 f1054（选中拉直后最清楚的一帧）重画，不用视频里的原图。比例取自那一帧：
+  // 外圈深红包边 0.8%，奶白小花细边，深蓝主边带约 4.8% 宽、排着红色大圆花，里面几道细边，内场从 10.5% 开始；
+  // 红底上撒满细小花枝；四角是深蓝角花，边上一条带圆齿的奶白花带；中心是深蓝阶梯菱形，
+  // 里面一朵八瓣奶白大花；菱形左右各一个深蓝小水滴
   const W = 1800, H = 1200;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
-  const RED = '#8a1c1c', RED2 = '#6e1414', NAVY = '#1b2346', NAVY2 = '#121935',
-    CREAM = '#e8d6ad', GOLD = '#c99a4b', TEAL = '#2f5d62', ROSE = '#c0574a';
-
-  const rnd = mulberry32(7);
-
-  // 底色
-  g.fillStyle = RED; g.fillRect(0, 0, W, H);
-
-  // 外边框：深蓝宽带 + 米色细线
-  const B = 150;
-  g.fillStyle = NAVY; g.fillRect(0, 0, W, H);
-  g.fillStyle = RED; g.fillRect(B, B, W - 2 * B, H - 2 * B);
-  stripe(18, CREAM, 6); stripe(34, RED2, 8); stripe(B - 24, CREAM, 6); stripe(B - 10, GOLD, 4);
-  function stripe(inset, color, w) {
-    g.strokeStyle = color; g.lineWidth = w;
-    g.strokeRect(inset, inset, W - 2 * inset, H - 2 * inset);
-  }
-
-  // 边框里的花朵带
-  const rosette = (x, y, r, petals, c1, c2, c3) => {
-    g.save(); g.translate(x, y);
-    g.fillStyle = c1;
-    for (let i = 0; i < petals; i++) {
-      g.rotate((Math.PI * 2) / petals);
-      g.beginPath(); g.ellipse(r * 0.55, 0, r * 0.45, r * 0.2, 0, 0, Math.PI * 2); g.fill();
-    }
-    g.fillStyle = c2; g.beginPath(); g.arc(0, 0, r * 0.32, 0, Math.PI * 2); g.fill();
-    g.fillStyle = c3; g.beginPath(); g.arc(0, 0, r * 0.14, 0, Math.PI * 2); g.fill();
+  const RED = '#7e1f1c', RED_HI = '#8e2a26', RED_DK = '#5e1715', EDGE = '#651416',
+    NAVY = '#1b1d27', NAVY_HI = '#262a3a', CREAM = '#c8a188', CREAM_DK = '#a87f68', ROSE = '#996a5b', ROSE_DK = '#7c4a3e', TAN = '#bf9680';
+  const rnd = mulberry32(11);
+  const box = (i, color) => { g.fillStyle = color; g.fillRect(i, i, W - 2 * i, H - 2 * i); };
+  const ring = (i, w, color) => { g.strokeStyle = color; g.lineWidth = w; g.strokeRect(i + w / 2, i + w / 2, W - 2 * i - w, H - 2 * i - w); };
+  const dot = (x, y, r, color) => { g.fillStyle = color; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); };
+  const flower = (x, y, r, petals, c1, c2, c3, rot = 0) => {
+    g.save(); g.translate(x, y); g.rotate(rot); g.fillStyle = c1;
+    for (let i = 0; i < petals; i++) { g.rotate((Math.PI * 2) / petals); g.beginPath(); g.ellipse(r * 0.58, 0, r * 0.42, r * 0.22, 0, 0, Math.PI * 2); g.fill(); }
+    g.restore();
+    dot(x, y, r * 0.34, c2); if (c3) dot(x, y, r * 0.14, c3);
+  };
+  const leaf = (x, y, a, l, w, color) => { g.save(); g.translate(x, y); g.rotate(a); g.fillStyle = color; g.beginPath(); g.ellipse(l / 2, 0, l / 2, w / 2, 0, 0, Math.PI * 2); g.fill(); g.restore(); };
+  // 佩斯利水滴（小花叶）
+  const boteh = (x, y, s, a, c1, c2) => {
+    g.save(); g.translate(x, y); g.rotate(a); g.scale(s, s);
+    g.fillStyle = c1; g.beginPath(); g.moveTo(0, -14); g.bezierCurveTo(14, -12, 14, 10, 0, 12); g.bezierCurveTo(-12, 10, -10, -4, 6, -2); g.bezierCurveTo(-2, -8, -6, -12, 0, -14); g.fill();
+    g.fillStyle = c2; g.beginPath(); g.arc(3, 3, 4, 0, Math.PI * 2); g.fill();
     g.restore();
   };
-  const mid = B / 2 + 4;
-  for (let x = 90; x < W - 60; x += 92) { rosette(x, mid, 40, 8, ROSE, CREAM, NAVY2); rosette(x, H - mid, 40, 8, ROSE, CREAM, NAVY2); }
-  for (let y = 182; y < H - 140; y += 92) { rosette(mid, y, 40, 8, ROSE, CREAM, NAVY2); rosette(W - mid, y, 40, 8, ROSE, CREAM, NAVY2); }
-  // 花朵之间的小叶
-  g.fillStyle = TEAL;
-  for (let x = 136; x < W - 100; x += 92) { leaf(x, mid, 0); leaf(x, H - mid, 0); }
-  for (let y = 228; y < H - 180; y += 92) { leaf(mid, y, Math.PI / 2); leaf(W - mid, y, Math.PI / 2); }
-  function leaf(x, y, a) { g.save(); g.translate(x, y); g.rotate(a); g.beginPath(); g.ellipse(0, 0, 18, 7, 0, 0, Math.PI * 2); g.fill(); g.restore(); }
+  // 沿一条带子排一串东西
+  const along = (x0, y0, x1, y1, step, fn) => { const L = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.round(L / step)); for (let i = 0; i <= n; i++) fn(x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n, i); };
+  const rectRun = (inset, step, fn) => {
+    along(inset, inset, W - inset, inset, step, fn); along(inset, H - inset, W - inset, H - inset, step, fn);
+    along(inset, inset, inset, H - inset, step, fn); along(W - inset, inset, W - inset, H - inset, step, fn);
+  };
 
-  // 内场：小花散点纹
-  g.save();
-  g.beginPath(); g.rect(B, B, W - 2 * B, H - 2 * B); g.clip();
-  for (let y = B + 30; y < H - B; y += 54) {
-    for (let x = B + 30 + ((y / 54) % 2) * 27; x < W - B; x += 54) {
-      const t = rnd();
-      if (t < 0.55) rosette(x, y, 14, 6, t < 0.3 ? CREAM : GOLD, NAVY, CREAM);
-      else { g.fillStyle = t < 0.8 ? NAVY : TEAL; g.save(); g.translate(x, y); g.rotate(Math.PI / 4); g.fillRect(-6, -6, 12, 12); g.restore(); }
-    }
+  // 1. 从外到内的边：深红包边、奶白小花细边、深线、深蓝主边带、细边组
+  box(0, EDGE);
+  box(14, RED_DK);
+  rectRun(27, 22, (x, y, i) => (i % 2 ? dot(x, y, 4.5, CREAM) : flower(x, y, 9, 4, CREAM_DK, RED, null, Math.PI / 4)));
+  box(46, NAVY);
+  const MB0 = 46, MB1 = 132, mid = (MB0 + MB1) / 2;
+  // 主边带：红色大圆花（奶白圈、深蓝心），花间是小奶白花和蔓
+  rectRun(mid, 104, (x, y) => { flower(x, y, 32, 10, RED, RED_HI, null); flower(x, y, 22, 8, ROSE, RED_DK, null, 0.3); dot(x, y, 10, CREAM_DK); dot(x, y, 6, RED); for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4; dot(x + Math.cos(a) * 26, y + Math.sin(a) * 26, 2.5, CREAM_DK); } });
+  for (const [x0, y0, x1, y1] of [[mid, mid, W - mid, mid], [mid, H - mid, W - mid, H - mid], [mid, mid, mid, H - mid], [W - mid, mid, W - mid, H - mid]]) {
+    const L = Math.hypot(x1 - x0, y1 - y0), n = Math.round(L / 104);
+    for (let i = 0; i < n; i++) { const t = (i + 0.5) / n, x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t; flower(x, y, 11, 6, CREAM, ROSE, RED); leaf(x - 20, y - 14, -0.6, 16, 6, ROSE_DK); leaf(x + 6, y + 10, 0.6, 16, 6, ROSE_DK); }
   }
-  // 藤蔓
-  g.strokeStyle = 'rgba(232,214,173,0.35)'; g.lineWidth = 3;
-  for (let k = 0; k < 14; k++) {
-    g.beginPath();
-    let x = B + rnd() * (W - 2 * B), y = B + rnd() * (H - 2 * B);
-    g.moveTo(x, y);
-    for (let s = 0; s < 6; s++) { const nx = x + (rnd() - 0.5) * 260, ny = y + (rnd() - 0.5) * 200; g.quadraticCurveTo((x + nx) / 2 + 40, (y + ny) / 2 - 40, nx, ny); x = nx; y = ny; }
+  // 细边组：奶白线、红色小花带、奶白线、深线、红细带、奶白线
+  ring(132, 5, CREAM_DK);
+  g.fillStyle = RED_DK; g.fillRect(137, 137, W - 274, H - 274);
+  rectRun(148.5, 19, (x, y, i) => (i % 2 ? dot(x, y, 3.5, CREAM) : dot(x, y, 4.5, ROSE)));
+  ring(160, 4, CREAM_DK); ring(164, 6, NAVY);
+  g.fillStyle = RED; g.fillRect(170, 170, W - 340, H - 340);
+  rectRun(176, 14, (x, y) => dot(x, y, 2.6, TAN));
+  ring(182, 4, CREAM_DK);
+
+  // 2. 内场
+  const F = 186, FW = W - 2 * F, FH = H - 2 * F;
+  g.fillStyle = RED; g.fillRect(F, F, FW, FH);
+  g.save(); g.beginPath(); g.rect(F, F, FW, FH); g.clip();
+  // 底纹：深红藤蔓
+  g.lineCap = 'round';
+  for (let k = 0; k < 120; k++) {
+    let x = F + rnd() * FW, y = F + rnd() * FH, a = rnd() * 6.28;
+    g.strokeStyle = rnd() < 0.6 ? RED_DK : ROSE_DK; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x, y);
+    for (let s2 = 0; s2 < 6; s2++) { a += (rnd() - 0.5) * 1.3; const nx = x + Math.cos(a) * 26, ny = y + Math.sin(a) * 26; g.quadraticCurveTo((x + nx) / 2 + (rnd() - 0.5) * 10, (y + ny) / 2 + (rnd() - 0.5) * 10, nx, ny); x = nx; y = ny; if (rnd() < 0.45) leaf(x, y, a + (rnd() < 0.5 ? 0.9 : -0.9), 13, 5, rnd() < 0.5 ? ROSE_DK : NAVY_HI); }
     g.stroke();
+  }
+  // 细密的小花：间距 34，奶白、玫瑰、深蓝几种
+  for (let y = F + 14; y < H - F; y += 32) {
+    for (let x = F + 14 + ((y / 32) % 2) * 16; x < W - F; x += 32) {
+      const t = rnd(), jx = (rnd() - 0.5) * 14, jy = (rnd() - 0.5) * 14;
+      if (t < 0.25) { flower(x + jx, y + jy, 15 + rnd() * 5, 8, ROSE_DK, RED_HI, NAVY, rnd() * 6); dot(x + jx, y + jy, 3, CREAM); }
+      else if (t < 0.42) flower(x + jx, y + jy, 10, 5, rnd() < 0.4 ? CREAM_DK : ROSE, RED_DK, null, rnd() * 6);
+      else if (t < 0.6) boteh(x + jx, y + jy, 1.3, rnd() * 6.28, ROSE, NAVY);
+      else if (t < 0.72) { leaf(x + jx, y + jy, rnd() * 6, 22, 8, ROSE_DK); }
+      else if (t < 0.84) flower(x + jx, y + jy, 9, 4, NAVY_HI, ROSE, null, rnd() * 6);
+      else dot(x + jx, y + jy, 3.5, CREAM_DK);
+    }
   }
   g.restore();
 
-  // 四角的四分之一花饰
-  const corner = (x, y, sx, sy) => {
-    g.save(); g.translate(x, y); g.scale(sx, sy);
-    g.beginPath(); g.moveTo(0, 0); g.lineTo(300, 0); g.quadraticCurveTo(250, 150, 0, 240); g.closePath();
-    g.fillStyle = NAVY; g.fill();
-    g.beginPath(); g.moveTo(0, 0); g.lineTo(230, 0); g.quadraticCurveTo(190, 110, 0, 180); g.closePath();
-    g.fillStyle = CREAM; g.fill();
-    g.beginPath(); g.moveTo(0, 0); g.lineTo(160, 0); g.quadraticCurveTo(130, 70, 0, 120); g.closePath();
-    g.fillStyle = RED2; g.fill();
-    rosette(70, 45, 34, 8, GOLD, NAVY, CREAM);
+  // 3. 两端的深蓝角区：一条带圆齿的奶白花带从上边 30% 处弯到侧边 40% 高处，贴着侧边往下，再弯回下边，
+  //    带子外侧（靠角的一边）是深蓝底红花，内场是一块中间宽、两头窄的红地
+  const endBracket = (sx) => {
+    g.save(); g.translate(sx < 0 ? W : 0, 0); g.scale(sx, 1);
+    const xa = W * 0.3, xs = F + 40, ya = H * 0.3, yb = H * 0.7;
+    const curve = (join) => {
+      if (join) g.lineTo(xa, F); else g.moveTo(xa, F); g.bezierCurveTo(xa - 90, F + 60, xs + 40, ya - 120, xs, ya);
+      g.lineTo(xs, yb); g.bezierCurveTo(xs + 40, yb + 120, xa - 90, H - F - 60, xa, H - F);
+    };
+    // 花带的点：沿曲线取样
+    const samples = [];
+    { const seg = (p0, p1, p2, p3, n) => { for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t; samples.push([u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0], u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1]]); } };
+      seg([xa, F], [xa - 90, F + 60], [xs + 40, ya - 120], [xs, ya], 16);
+      for (let i = 1; i < 6; i++) samples.push([xs, ya + ((yb - ya) * i) / 6]);
+      seg([xs, yb], [xs + 40, yb + 120], [xa - 90, H - F - 60], [xa, H - F], 16); }
+    g.save(); g.beginPath(); g.rect(F, F, W - 2 * F, H - 2 * F); g.clip();
+    g.strokeStyle = CREAM; g.lineWidth = 74; g.lineJoin = 'round'; g.beginPath(); curve(); g.stroke();
+    for (const [x, y] of samples) dot(x + 34, y, 15, CREAM);   // 朝内场的圆齿
+    g.fillStyle = NAVY; g.beginPath(); g.moveTo(F, F); curve(true); g.lineTo(F, H - F); g.closePath(); g.fill();
+    g.strokeStyle = CREAM_DK; g.lineWidth = 3; g.beginPath(); curve(); g.stroke();
+    samples.forEach(([x, y], i) => { if (i % 2) flower(x + 19, y, 10, 5, ROSE, RED, null); else dot(x + 19, y, 4, ROSE_DK); });
     g.restore();
-  };
-  corner(B, B, 1, 1); corner(W - B, B, -1, 1); corner(B, H - B, 1, -1); corner(W - B, H - B, -1, -1);
-
-  // 中心大花饰：多层星形 + 两端吊坠
-  const cx = W / 2, cy = H / 2;
-  const star = (r1, r2, n, color, rot = 0) => {
-    g.beginPath();
-    for (let i = 0; i < n * 2; i++) {
-      const r = i % 2 ? r2 : r1, a = rot + (i * Math.PI) / n;
-      const x = cx + Math.cos(a) * r * 1.35, y = cy + Math.sin(a) * r;
-      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    // 深蓝角区里的红花和叶
+    g.save(); g.beginPath(); g.moveTo(F, F); curve(true); g.lineTo(F, H - F); g.closePath(); g.clip();
+    for (let y = F + 12; y < H - F; y += 34) for (let x = F + 12 + ((y / 34) % 2) * 17; x < xa; x += 34) {
+      const t = rnd();
+      if (t < 0.45) flower(x, y, 12, 7, RED_HI, ROSE, NAVY, rnd() * 6);
+      else if (t < 0.7) leaf(x, y, rnd() * 6, 18, 6, ROSE_DK);
+      else if (t < 0.85) dot(x, y, 3.5, CREAM_DK);
     }
-    g.closePath(); g.fillStyle = color; g.fill();
-  };
-  // 吊坠
-  for (const s of [-1, 1]) {
-    g.save(); g.translate(cx + s * 470, cy);
-    g.beginPath(); g.moveTo(-s * 60, -70); g.lineTo(s * 70, 0); g.lineTo(-s * 60, 70); g.closePath();
-    g.fillStyle = NAVY; g.fill();
-    rosette(0, 0, 36, 8, CREAM, RED2, GOLD);
     g.restore();
+    g.restore();
+  };
+  endBracket(1); endBracket(-1);
+
+  // 4. 中心：深蓝阶梯菱形（半宽 16.5%、半高 24.5%），奶白描边，里面撒红花
+  const cx = W / 2, cy = H / 2, MW = W * 0.165, MH = H * 0.245;
+  const stepDiamond = (hw, hh, steps) => {
+    g.beginPath();
+    const pts = [];
+    for (let i = 0; i <= steps; i++) { const t = i / steps; pts.push([hw * t, -hh * (1 - t)]); }
+    // 每段做成小台阶
+    const quad = (sx, sy) => { for (let i = 0; i < steps; i++) { const [x0, y0] = pts[i], [x1, y1] = pts[i + 1]; g.lineTo(cx + sx * x1, cy + sy * y0); g.lineTo(cx + sx * x1, cy + sy * y1); } };
+    g.moveTo(cx, cy - hh); quad(1, 1);
+    for (let i = steps; i > 0; i--) { const [x0, y0] = pts[i], [x1, y1] = pts[i - 1]; g.lineTo(cx + x1, cy - y0); g.lineTo(cx + x1, cy - y1); }
+    for (let i = 0; i < steps; i++) { const [x0, y0] = pts[i], [x1, y1] = pts[i + 1]; g.lineTo(cx - x1, cy - y0); g.lineTo(cx - x1, cy - y1); }
+    for (let i = steps; i > 0; i--) { const [x0, y0] = pts[i], [x1, y1] = pts[i - 1]; g.lineTo(cx - x1, cy + y0); g.lineTo(cx - x1, cy + y1); }
+    g.closePath();
+  };
+  // 上下两端的小花头
+  for (const s2 of [-1, 1]) { g.fillStyle = NAVY; g.beginPath(); g.ellipse(cx, cy + s2 * (MH + 18), 22, 30, 0, 0, Math.PI * 2); g.fill(); flower(cx, cy + s2 * (MH + 18), 13, 6, CREAM_DK, RED, null); }
+  g.fillStyle = CREAM; stepDiamond(MW + 10, MH + 10, 9); g.fill();
+  g.fillStyle = NAVY; stepDiamond(MW, MH, 9); g.fill();
+  g.save(); stepDiamond(MW - 4, MH - 4, 9); g.clip();
+  for (let y = cy - MH; y < cy + MH; y += 28) for (let x = cx - MW + ((y / 28) % 2) * 14; x < cx + MW; x += 28) {
+    const t = rnd();
+    if (t < 0.5) flower(x, y, 9, 6, RED_HI, CREAM_DK, NAVY, rnd() * 6);
+    else if (t < 0.75) leaf(x, y, rnd() * 6, 13, 5, ROSE_DK);
   }
-  star(330, 270, 16, NAVY);
-  star(300, 250, 16, CREAM, 0.1);
-  star(270, 220, 16, RED2);
-  star(220, 170, 12, NAVY, 0.2);
-  star(170, 140, 12, GOLD);
-  star(140, 110, 8, CREAM, 0.3);
-  star(100, 80, 8, ROSE);
-  rosette(cx, cy, 70, 12, NAVY, CREAM, RED2);
-  // 中心花饰周围的小花圈
-  for (let i = 0; i < 16; i++) {
-    const a = (i * Math.PI) / 8;
-    rosette(cx + Math.cos(a) * 245 * 1.35, cy + Math.sin(a) * 195, 16, 6, CREAM, NAVY, GOLD);
+  g.restore();
+  // 八瓣奶白大花：半宽 17% 毯宽的一半，花瓣是圆头
+  const lobed = (r, n, color, amp) => {
+    g.fillStyle = color; g.beginPath();
+    for (let i = 0; i <= 360; i++) { const a = (i * Math.PI) / 180, rr = r * (1 + amp * Math.pow(Math.abs(Math.cos((a * n) / 2)), 0.6)); const x = cx + Math.cos(a) * rr * 1.0, y = cy + Math.sin(a) * rr * 1.1; i ? g.lineTo(x, y) : g.moveTo(x, y); }
+    g.closePath(); g.fill();
+  };
+  lobed(128, 8, CREAM_DK, 0.18); lobed(122, 8, CREAM, 0.18);
+  for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4 + Math.PI / 8; flower(cx + Math.cos(a) * 92, cy + Math.sin(a) * 100, 13, 6, ROSE, RED_DK, null, a); }
+  lobed(70, 8, RED_HI, 0.25);
+  flower(cx, cy, 64, 12, RED, NAVY, null);
+  flower(cx, cy, 36, 8, CREAM_DK, RED_HI, NAVY);
+  // 左右的小水滴：深蓝外框、红心、奶白描边
+  for (const s2 of [-1, 1]) {
+    const px = cx + s2 * W * 0.25;
+    const drop = (k, color) => { g.fillStyle = color; g.beginPath(); g.moveTo(px - s2 * 70 * k, cy); g.bezierCurveTo(px - s2 * 30 * k, cy - 44 * k, px + s2 * 46 * k, cy - 46 * k, px + s2 * 46 * k, cy); g.bezierCurveTo(px + s2 * 46 * k, cy + 46 * k, px - s2 * 30 * k, cy + 44 * k, px - s2 * 70 * k, cy); g.fill(); };
+    drop(1.5, CREAM_DK); drop(1.38, NAVY); drop(0.95, RED);
+    flower(px + s2 * 10, cy, 14, 6, ROSE, CREAM, NAVY);
   }
 
-  // 磨旧感：随机细斑点
+  // 5. 织物的细颗粒
   const img = g.getImageData(0, 0, W, H);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (rnd() - 0.5) * 22;
+    const n = (rnd() - 0.5) * 18;
     d[i] += n; d[i + 1] += n; d[i + 2] += n;
   }
   g.putImageData(img, 0, 0);

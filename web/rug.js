@@ -39,7 +39,7 @@ sun.shadow.intensity = 0.5;   // 投影淡一些，鼓包靠朝光面的亮和�
 scene.add(sun, sun.target);
 
 // 接影子的透明地面，比布低一点，地毯边缘有一圈细影
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, H * 2), new THREE.ShadowMaterial({ opacity: 0.32 }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, H * 2), new THREE.ShadowMaterial({ opacity: 0.4 }));
 ground.position.z = -1.5;
 ground.receiveShadow = true;
 scene.add(ground);
@@ -63,8 +63,10 @@ function screenToPlane(sx, sy, z) {
 
 // ---------- 地毯摆放状态（保存在本地） ----------
 const ASPECT = 44 / 70;   // 宽高比 1.59，参考视频静止的地毯是 1.598
+// 默认位置按参考视频 f0700：毯宽占屏宽 46%（屏幕很宽时最多 720 点，约十二个桌面图标宽），
+// 中心在屏幕横向 50.4%、纵向 44.1% 处，逆时针歪 3 度
 function defaultPlacement() {
-  return { cx: 0, cy: -H * 0.05, angle: 0, width: Math.min(W * 0.34, 680) };
+  return { cx: W * 0.004, cy: H * 0.059, angle: (3 * Math.PI) / 180, width: Math.min(W * 0.46, 720) };
 }
 let place = defaultPlacement();
 try {
@@ -152,7 +154,7 @@ function drapeRest() {
       sx -= (dx / r) * Math.min(S, d * 0.8);
       sy -= (dy / r) * Math.min(S, d * 0.8);
     }
-    const len = Math.hypot(sx, sy), cap = 14;
+    const len = Math.hypot(sx, sy), cap = 3;   // 参考视频里没有可见的鼓包，花纹几乎不往里收
     const f = len > cap ? cap / len : 1;
     rest[k * 2] = x + sx * f;
     rest[k * 2 + 1] = y + sy * f;
@@ -175,12 +177,13 @@ function buildStacks() {
   }
   stacks.forEach((s, i) => {
     s.x = s.sx / s.n; s.y = s.sy / s.n;
-    s.h = Math.min(11 + 8 * (s.n - 1), 52);   // 一个图标约 11 点高，每多一个加 8 点
-    s.F = 10 + s.h * 1.15;                      // 坡的水平长度，越高坡越长
+    s.h = Math.min(2 + 1.2 * (s.n - 1), 10);   // 参考视频里几乎看不出鼓包：一个图标约 2 点，每多一个加 1.2 点，最多 10 点
+    s.F = 18 + 2 * s.h;                         // 坡的水平长度，缓缓地坡下去
     s.K = 4 + (i % 3);                          // 褶子的条数
     s.ph = i * 1.7;
   });
 }
+const RIDGE_AMP = 0;   // 放射状褶子的强度，参考视频里没有，先关掉；要试效果时改成 1
 const smooth = (t) => t * t * (3 - 2 * t);
 function bumpAt(x, y) {
   let best = 0;
@@ -202,7 +205,7 @@ function bumpAt(x, y) {
       // 每条褶子宽窄、强弱不一，往外略微打弯
       const a = ang * s.K + s.ph + Math.sin(ang * 2 + s.ph) * 0.7 + u * 0.8;
       const ridge = Math.pow(Math.max(0, Math.cos(a)), 1.6) * (0.55 + 0.45 * Math.sin(ang * 3 + s.ph * 2));
-      h += (3 + s.h * 0.4) * ridge * Math.sin(Math.PI * Math.sqrt(u)) * (1 - u);
+      h += RIDGE_AMP * Math.min(0.15 * s.h, 1) * ridge * Math.sin(Math.PI * Math.sqrt(u)) * (1 - u);
     }
     if (h > best) best = h;
   }
@@ -401,16 +404,15 @@ for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
 geo.setIndex(tri);
 geo.computeVertexNormals();
 
-// 叠在所有材质上的一层：包边和细密的织纹，让它读起来像一块织物
+// 叠在所有材质上的一层：包边上的细罗纹
 function makeOverlay() {
   const c = document.createElement('canvas');
   c.width = 1800; c.height = 1200;
   const g = c.getContext('2d');
-  for (let y = 0; y < c.height; y += 4) { g.fillStyle = 'rgba(0,0,0,0.07)'; g.fillRect(0, y, c.width, 1.5); }
-  for (let x = 0; x < c.width; x += 4) { g.fillStyle = 'rgba(255,255,255,0.035)'; g.fillRect(x, 0, 1.5, c.height); }
-  const b = 16;
-  g.strokeStyle = 'rgba(28,16,10,0.78)'; g.lineWidth = b * 2; g.strokeRect(0, 0, c.width, c.height);
-  g.strokeStyle = 'rgba(232,214,173,0.45)'; g.lineWidth = 3; g.strokeRect(b + 4, b + 4, c.width - 2 * b - 8, c.height - 2 * b - 8);
+  // 参考视频里内场看不出织纹，只有包边上有很细的竖向罗纹（f0700）。包边约 0.8% 毯宽，图案自带
+  const e = Math.round(c.width * 0.008);
+  for (let x = 0; x < c.width; x += 3) { g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(x, 0, 1, e); g.fillRect(x, c.height - e, 1, e); }
+  for (let y = 0; y < c.height; y += 3) { g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(0, y, e, 1); g.fillRect(c.width - e, y, e, 1); }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -421,7 +423,8 @@ let surface = null;
 let surfaceTex = null;
 let surfaceBorn = 0;
 // 正面用带绒面光泽的材质：朝光的坡面会亮起一层柔和的高光，像羊毛绒头
-const frontMat = new THREE.MeshPhysicalMaterial({ roughness: 0.85, specularIntensity: 0.3, metalness: 0, side: THREE.FrontSide, sheen: 0.3, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffe2c0) });
+// 参考视频里的布面是哑光的，没有高光
+const frontMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, side: THREE.FrontSide });
 const backMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, side: THREE.BackSide });
 for (const m of [frontMat, backMat]) {
   m.onBeforeCompile = (shader) => {
@@ -432,21 +435,7 @@ for (const m of [frontMat, backMat]) {
     );
   };
 }
-// 背面是地毯背后的织底：花纹褪色偏麻色，上面是一格一格的经纬结
-backMat.onBeforeCompile = (shader) => {
-  shader.fragmentShader = shader.fragmentShader.replace(
-    '#include <map_fragment>',
-    `#include <map_fragment>
-    #ifdef USE_MAP
-    float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
-    vec3 jute = vec3(0.56, 0.46, 0.33);
-    diffuseColor.rgb = mix(mix(diffuseColor.rgb, vec3(lum), 0.55), jute, 0.35) * 0.82;
-    vec2 g = abs(fract(vMapUv * vec2(210.0, 140.0)) - 0.5);
-    float knot = smoothstep(0.3, 0.5, max(g.x, g.y));
-    diffuseColor.rgb *= 1.0 - 0.32 * knot;
-    #endif`,
-  );
-};
+// 参考视频里翻过去的那一面和正面是同一幅图案，颜色相差不到 3%，所以背面直接用同一张贴图
 
 // 厚度：正面在布料点上，背面沿法线往下偏移一个厚度，四周再补一圈侧边
 const backPos = new Float32Array(N * 3);
@@ -475,7 +464,7 @@ for (let r = 0; r < RING.length; r++) {
   sideIdx.push(a, a + 1, b, b, a + 1, b + 1);
 }
 sideGeo.setIndex(sideIdx);
-const sideMat = new THREE.MeshStandardMaterial({ color: 0x2b1e16, roughness: 1, side: THREE.DoubleSide });
+const sideMat = new THREE.MeshStandardMaterial({ color: 0x4a1012, roughness: 1, side: THREE.DoubleSide });
 
 function updateThickness() {
   const T = thick();
@@ -503,7 +492,10 @@ back.receiveShadow = true;
 const side = new THREE.Mesh(sideGeo, sideMat);
 side.castShadow = true; side.receiveShadow = true;
 front.frustumCulled = back.frustumCulled = side.frustumCulled = false;
-scene.add(front, back, side);
+const rugGroup = new THREE.Group();
+rugGroup.matrixAutoUpdate = false;
+rugGroup.add(front, back, side);
+scene.add(rugGroup);
 
 let materialId = MATERIAL_IDS.includes(params.get('material')) ? params.get('material') : 'persian';
 function setMaterial(id) {
@@ -537,6 +529,7 @@ for (let f = 0; f < frCount; f++) { const b = f * 4; frIdx.push(b, b + 1, b + 2,
 frGeo.setIndex(frIdx);
 const fringe = new THREE.Mesh(frGeo, new THREE.MeshStandardMaterial({ color: 0xe6d6b4, roughness: 1, side: THREE.DoubleSide }));
 fringe.frustumCulled = false;
+fringe.visible = false;   // 参考视频里的地毯没有流苏
 scene.add(fringe);
 const frJitter = Array.from({ length: frCount }, (_, f) => 0.85 + 0.3 * Math.abs(Math.sin(f * 12.9898) * 43758.5453 % 1));
 
@@ -572,11 +565,50 @@ for (let j = 2; j <= NY; j += 2) PERIM.push(idx(NX, j));
 for (let i = NX - 2; i >= 0; i -= 2) PERIM.push(idx(i, NY));
 for (let j = NY - 2; j > 0; j -= 2) PERIM.push(idx(0, j));
 
+// ---------- 按住 Option 选中地毯（参考视频 f1030 到 f1054 选中，f1342 到 f1346 取消） ----------
+// 选中时布拉直：宽度 24 帧里先冲到 1.063 倍（第 14 帧）再回到 1.037 倍，高度一直升到 1.092 倍，
+// 整块抬起，影子变大。取消时 4 帧内线性落回。这些倍数是视频里 764x476 到 792x520 的量。
+const SEL_SX = 792 / 764, SEL_SY = 520 / 476, SEL_LIFT = 16, SEL_PEAK = (812 - 764) / (792 - 764);
+let selOn = false, selT0 = -1e9;
+const selNow = { w: 0, h: 0, z: 0 }, selFrom = { w: 0, h: 0, z: 0 };
+function updateSel(now) {
+  const n = ((now - selT0) / 1000) * 60;   // 进入当前状态后过了几帧（按 60 帧）
+  if (selOn) {
+    const eo = (t) => 1 - (1 - t) * (1 - t);
+    selNow.w = n < 14 ? SEL_PEAK * eo(n / 14) : n < 24 ? SEL_PEAK + (1 - SEL_PEAK) * smooth((n - 14) / 10) : 1;
+    selNow.h = smooth(Math.min(n / 24, 1));
+    selNow.z = smooth(Math.min(n / 16, 1));
+  } else {
+    const u = Math.max(0, 1 - n / 4);
+    selNow.w = selFrom.w * u; selNow.h = selFrom.h * u; selNow.z = selFrom.z * u;
+  }
+  const { w: pw, h: ph, z: pz } = selNow, sx = 1 + (SEL_SX - 1) * pw, sy = 1 + (SEL_SY - 1) * ph;
+  const a = place.angle, c = Math.cos(a), si = Math.sin(a);
+  const m00 = c * c * sx + si * si * sy, m01 = c * si * (sx - sy), m11 = si * si * sx + c * c * sy;
+  rugGroup.matrix.set(m00, m01, 0, place.cx - (m00 * place.cx + m01 * place.cy), m01, m11, 0, place.cy - (m01 * place.cx + m11 * place.cy), 0, 0, 1, SEL_LIFT * pz, 0, 0, 0, 1);
+  rugGroup.matrixWorldNeedsUpdate = true;
+  return selOn ? n < 26 : n < 5;   // 还在动画里
+}
+// 世界坐标里的一点在选中变形之后落在屏幕哪里
+function selScreen(x, y, z = 0) {
+  _sv.set(x, y, z).applyMatrix4(rugGroup.matrix);
+  return toScreen(_sv.x, _sv.y, _sv.z);
+}
+const _sv = new THREE.Vector3();
+function setSelected(b) {
+  if (b === selOn) return;
+  if (!b) { selFrom.w = selNow.w; selFrom.h = selNow.h; selFrom.z = selNow.z; }
+  selOn = b; selT0 = performance.now();
+  // 选中时布先放平（参考视频 f1030 右上角的翘角在选中后 24 帧内拉平）
+  if (b && (deformed || phase === 'falling')) flatten();
+  wake();
+}
+
 function cornersScreen(pad = 0) {
   const ks = [idx(0, 0), idx(NX, 0), idx(NX, NY), idx(0, NY)];
-  const [cx, cy] = toScreen(place.cx, place.cy, 0);
+  const [cx, cy] = selScreen(place.cx, place.cy, 0);
   return ks.map((k) => {
-    let [x, y] = toScreen(rest[k * 2], rest[k * 2 + 1], 0);
+    let [x, y] = selScreen(rest[k * 2], rest[k * 2 + 1], 0);
     if (pad) { const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy); x += (dx / d) * pad; y += (dy / d) * pad; }
     return [x, y];
   });
@@ -638,31 +670,95 @@ function publishHit() {
   let flat = [];
   if (phase === 'idle') {
     // 静止时用四个角，按 Option 时往外扩一点把角上的控制点也算进去；流苏也算在地毯里
-    for (const [x, y] of idleOutline(optionDown ? 26 : 10)) flat.push(Math.round(x), Math.round(y));
+    let pts = idleOutline(optionDown ? 26 : 10);
+    const pr = optionDown && selUI().pill;
+    if (pr) pts = hullOf(pts.concat([[pr[0], pr[1]], [pr[0] + pr[2], pr[1]], [pr[0] + pr[2], pr[1] + pr[3] + 4], [pr[0], pr[1] + pr[3] + 4]]));
+    for (const [x, y] of pts) flat.push(Math.round(x), Math.round(y));
   } else {
     for (const k of PERIM) { const [x, y] = toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]); flat.push(Math.round(x), Math.round(y)); }
   }
   const s = flat.join(',');
-  if (s !== lastHit) { lastHit = s; post({ type: 'hit', poly: flat }); }
+  if (s !== lastHit) { lastHit = s; post({ type: 'hit', poly: flat }); if (params.get('debug')) console.log('点击范围', s); }
 }
 
-// ---------- Option 控制点 ----------
+// ---------- Option 选中时的控制点、花样条、角度气泡（参考视频 f1054、f1210） ----------
+// 四角是小白点；地毯最低点下方约 42 点处有一条「花样 | 垃圾桶」小条；拖角旋转时光标旁显示角度
 const handles = [0, 1, 2, 3].map(() => {
   const d = document.createElement('div');
   Object.assign(d.style, {
-    position: 'fixed', width: '12px', height: '12px', marginLeft: '-6px', marginTop: '-6px', borderRadius: '50%',
-    background: '#fff', boxShadow: '0 0 0 1.5px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.4)', display: 'none', pointerEvents: 'none',
+    position: 'fixed', width: '8px', height: '8px', marginLeft: '-4px', marginTop: '-4px', borderRadius: '50%',
+    background: '#fff', boxShadow: '0 0 0 1px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.3)', display: 'none', pointerEvents: 'none',
   });
   document.body.appendChild(d);
   return d;
 });
-function updateHandles() {
-  const show = optionDown && (phase === 'idle' || mode === 'transform');
+const PILL_W = 136, PILL_H = 36, PILL_GAP = 24;
+const ICON_SWATCH = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2" width="5" height="12" rx="1.6"/><path d="M6.5 5.2l3.6-2.1a1.4 1.4 0 0 1 1.9.5l3 5.2a1.4 1.4 0 0 1-.5 1.9L6.5 14"/><circle cx="4" cy="11.3" r=".9" fill="currentColor"/></svg>';
+const ICON_TRASH = '<svg width="13" height="15" viewBox="0 0 13 15" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 3.2h11M4.5 3.2V1.6h4v1.6M2.4 3.2l.8 10.2h6.6l.8-10.2M5 5.8v5.3M8 5.8v5.3"/></svg>';
+const pill = document.createElement('div');
+Object.assign(pill.style, {
+  position: 'fixed', width: PILL_W + 'px', height: PILL_H + 'px', borderRadius: PILL_H / 2 + 'px', display: 'none',
+  background: 'rgba(176,131,89,0.94)', boxShadow: 'inset 0 0 0 1px rgba(255,236,210,0.18), 0 1px 3px rgba(60,35,15,0.18)',
+  color: 'rgba(250,226,192,0.95)', font: '600 13px -apple-system, "PingFang SC", sans-serif', alignItems: 'center', userSelect: 'none', cursor: 'default',
+});
+pill.innerHTML = `<div data-act="design" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:100%">${ICON_SWATCH}<span>花样</span></div>`
+  + '<div style="width:1px;height:18px;background:rgba(250,226,192,0.28)"></div>'
+  + `<div data-act="trash" style="width:42px;display:flex;align-items:center;justify-content:center;height:100%">${ICON_TRASH}</div>`;
+document.body.appendChild(pill);
+pill.addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'design') { const i = MATERIAL_IDS.indexOf(materialId); setMaterial(MATERIAL_IDS[(i + 1) % MATERIAL_IDS.length]); touchLive(); }
+  else if (act === 'trash') post({ type: 'quit' });   // 收起地毯：退出应用，下次打开还在原处
+});
+const bubble = document.createElement('div');
+Object.assign(bubble.style, {
+  position: 'fixed', display: 'none', padding: '2px 6px', borderRadius: '6px', background: 'rgba(92,64,40,0.9)',
+  color: '#f6e7d2', font: '600 11px -apple-system, sans-serif', pointerEvents: 'none',
+});
+document.body.appendChild(bubble);
+let pointerX = 0, pointerY = 0;
+// 控制点、花样条和气泡的位置，DOM 和录像共用
+function selUI() {
+  const show = selOn && (phase === 'idle' || phase === 'restoring' || mode === 'transform');
   const cs = cornersScreen();
+  const [ccx] = selScreen(place.cx, place.cy, 0);
+  const bottom = Math.max(...cs.map((p) => p[1]));
+  let deg = Math.round((place.angle * 180) / Math.PI) % 360; if (deg > 180) deg -= 360; if (deg <= -180) deg += 360;
+  return {
+    handles: show ? cs : null,
+    pill: show && selNow.h > 0.6 ? [ccx - PILL_W / 2, bottom + PILL_GAP, PILL_W, PILL_H] : null,
+    bubble: mode === 'transform' && tf && tf.kind === 'scale' ? [pointerX + 14, pointerY + 10, deg + '°'] : null,
+  };
+}
+function updateHandles() {
+  const ui = selUI();
   handles.forEach((h, i) => {
-    h.style.display = show ? 'block' : 'none';
-    if (show) { h.style.left = cs[i][0] + 'px'; h.style.top = cs[i][1] + 'px'; }
+    h.style.display = ui.handles ? 'block' : 'none';
+    if (ui.handles) { h.style.left = ui.handles[i][0] + 'px'; h.style.top = ui.handles[i][1] + 'px'; }
   });
+  pill.style.display = ui.pill ? 'flex' : 'none';
+  if (ui.pill) { pill.style.left = ui.pill[0] + 'px'; pill.style.top = ui.pill[1] + 'px'; }
+  bubble.style.display = ui.bubble ? 'block' : 'none';
+  if (ui.bubble) { bubble.style.left = ui.bubble[0] + 'px'; bubble.style.top = ui.bubble[1] + 'px'; bubble.textContent = ui.bubble[2]; }
+}
+// 录像和调试截图里没有 DOM，把同样的东西画到二维画布上
+function drawSelUI(g, ox, oy) {
+  const ui = selUI();
+  if (ui.handles) for (const [x, y] of ui.handles) { g.beginPath(); g.arc(x - ox, y - oy, 4, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); }
+  if (ui.pill) {
+    const [x, y, w, h] = ui.pill;
+    g.fillStyle = 'rgba(176,131,89,0.94)'; g.beginPath(); g.roundRect(x - ox, y - oy, w, h, h / 2); g.fill();
+    g.fillStyle = 'rgba(250,226,192,0.95)'; g.font = '600 13px -apple-system, "PingFang SC"'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('▱ 花样', x - ox + (w - 43) / 2, y - oy + h / 2); g.fillText('🗑', x - ox + w - 21, y - oy + h / 2);
+    g.fillStyle = 'rgba(250,226,192,0.28)'; g.fillRect(x - ox + w - 43, y - oy + 9, 1, h - 18);
+  }
+  if (ui.bubble) {
+    const [x, y, t] = ui.bubble;
+    g.font = '600 11px -apple-system'; const tw = g.measureText(t).width + 12;
+    g.fillStyle = 'rgba(92,64,40,0.9)'; g.beginPath(); g.roundRect(x - ox, y - oy, tw, 18, 6); g.fill();
+    g.fillStyle = '#f6e7d2'; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(t, x - ox + 6, y - oy + 9);
+  }
 }
 
 // ---------- 交互 ----------
@@ -769,7 +865,7 @@ function endTransform() { mode = null; tf = null; savePlace(); }
 
 let lastDownT = 0, lastDownX = 0, lastDownY = 0;
 const cv = renderer.domElement;
-cv.style.cursor = 'grab';
+cv.style.cursor = 'default';   // 参考视频里抓、拖、悬停都是普通箭头
 cv.addEventListener('pointerdown', (e) => {
   const inside = pointInPoly(e.clientX, e.clientY, idleOutline(optionDown ? 26 : 10)) || phase !== 'idle';
   if (!inside) return;
@@ -782,10 +878,10 @@ cv.addEventListener('pointerdown', (e) => {
   post({ type: 'drag', active: true });
   if (e.altKey || optionDown) beginTransform(e.clientX, e.clientY);
   else if (!beginGrab(e.clientX, e.clientY)) { post({ type: 'drag', active: false }); return; }
-  cv.style.cursor = mode === 'transform' ? 'move' : 'grabbing';
   touchLive();
 });
 cv.addEventListener('pointermove', (e) => {
+  pointerX = e.clientX; pointerY = e.clientY;
   if (performance.now() > liveUntil - LIVE_MS * 0.5) touchLive();   // 鼠标停在地毯上时材质保持流动
   if (mode === 'cloth') moveGrab(e.clientX, e.clientY);
   else if (mode === 'transform') moveTransform(e.clientX, e.clientY);
@@ -794,7 +890,6 @@ const up = () => {
   if (mode === 'cloth') endGrab();
   else if (mode === 'transform') endTransform();
   post({ type: 'drag', active: false });
-  cv.style.cursor = 'grab';
 };
 // 双击摊平：两次点击都几乎没动（4 点内）才算，抓住折角拖几下不会被当成双击
 let downX0 = 0, downY0 = 0, movedMax = 0;
@@ -893,13 +988,14 @@ function loop(t) {
   if (animated && (phase !== 'idle' || mode !== null || recorder || (frameCount & 1) === 0)) { surfaceTex.needsUpdate = true; needsRender = true; }
   if (recorder) needsRender = true;   // 录制时每帧都画，否则录到被清空的画布
 
+  const selAnimating = updateSel(performance.now());
+  if (selAnimating) needsRender = true;
   if (needsRender) {
     posAttr.needsUpdate = true;
     geo.computeVertexNormals();
     updateThickness();
-    updateFringe();
     const [lx, ly] = [place.cx, place.cy];
-    sun.position.set(lx - 700, ly + 760, 640);   // 斜射光，鼓包和褶皱才有明暗
+    sun.position.set(lx - 720, ly + 1200, 640);   // 光从左上来，影子落在右下，往下比往右长（参考视频 f1090）
     sun.target.position.set(lx, ly, 0);
     const r = place.width * 0.85;
     Object.assign(sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 100, far: 3000 });
@@ -916,6 +1012,7 @@ function loop(t) {
     const g = out.getContext('2d');
     g.fillStyle = '#b98f68'; g.fillRect(0, 0, rw, rh);
     g.drawImage(renderer.domElement, rx * dpr, ry * dpr, rw * dpr, rh * dpr, 0, 0, rw, rh);
+    drawSelUI(g, rx, ry);
     for (const name of snapQueue.splice(0)) post({ type: 'snap', name, data: out.toDataURL('image/png').split(',')[1] });
   }
   if (recorder) recorder.draw();
@@ -927,12 +1024,12 @@ function loop(t) {
 
   window.__cpu = (window.__cpu || 0) * 0.9 + (performance.now() - cpu0) * 0.1;
   // 静止且材质不动时停掉循环，省电
-  if (phase === 'idle' && !animated && mode === null && !demoRunning) { running = false; return; }
+  if (phase === 'idle' && !animated && mode === null && !demoRunning && !selAnimating) { running = false; return; }
   requestAnimationFrame(loop);
 }
 
 // ---------- 宿主调用的接口 ----------
-window.rugSetOption = (b) => { optionDown = b; if (!b && deformed) maskDirty = true;   // 按着 Option 时控制点在四角，范围临时改回外形，松开再用网格
+window.rugSetOption = (b) => { optionDown = b; setSelected(b); if (!b && deformed) maskDirty = true;   // 按着 Option 时控制点在四角，范围临时改回外形，松开再用网格
   needsRender = true; publishHit(); updateHandles(); };
 window.rugSetMaterial = (id) => { setMaterial(id); touchLive(); };
 window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };   // 放回屏幕中间，同时摊平
@@ -1111,11 +1208,8 @@ function startRecording() {
     draw() {
       g.fillStyle = bg; g.fillRect(0, 0, out.width, out.height);
       g.drawImage(renderer.domElement, rx * dpr, ry * dpr, out.width * dpr, out.height * dpr, 0, 0, out.width, out.height);
-      if (optionDown && (phase === 'idle' || mode === 'transform')) {
-        for (const [x, y] of cornersScreen()) {
-          g.beginPath(); g.arc(x - rx, y - ry, 6, 0, Math.PI * 2);
-          g.fillStyle = '#fff'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = 'rgba(0,0,0,0.55)'; g.stroke();
-        }
+      drawSelUI(g, rx, ry);
+      if (optionDown) {
         g.fillStyle = 'rgba(40,30,22,0.85)'; g.beginPath(); g.roundRect(out.width / 2 - 22, out.height - 64, 44, 44, 10); g.fill();
         g.fillStyle = '#fff'; g.font = '26px -apple-system'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('⌥', out.width / 2, out.height - 42);
       }
@@ -1169,6 +1263,10 @@ if (params.get('demo')) { if (!params.get('rug')) window.rugReset(); setTimeout(
 window.__t = {
   beginGrab: (x, y) => { const r = beginGrab(x, y); touchLive(); return r; }, moveGrab, endGrab: () => { endGrab(); wake(); }, cornersScreen, sleep, glide, lerp2, waitIdle,
   flatten: () => flatten(),
+  option: (b) => window.rugSetOption(b),
+  beginTransform: (x, y) => { pointerX = x; pointerY = y; beginTransform(x, y); }, moveTransform: (x, y) => { pointerX = x; pointerY = y; moveTransform(x, y); }, endTransform,
+  selNow: () => ({ ...selNow }),
+  tex: (name) => post({ type: 'snap', name, data: surface.canvas.toDataURL('image/png').split(',')[1] }),
   snap: (name) => { snapQueue.push(name); needsRender = true; wake(); },
   quit: () => post({ type: 'quit' }),
   state: () => ({ phase, deformed, place: { ...place } }),
