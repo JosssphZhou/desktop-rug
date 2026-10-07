@@ -56,6 +56,10 @@ scripts/make-app.sh
 open build/桌面地毯.app
 ```
 
+## Also by me
+
+[seesee](https://github.com/JosssphZhou/seesee): a native Mac video player your coding agent can control. Paste a link, watch with subtitles, let Claude Code or Codex queue videos and fix subtitles for you.
+
 ## License
 
 [MIT](LICENSE). Built with [three.js](https://threejs.org) (MIT) and [Paper Shaders](https://github.com/paper-design/shaders) (Apache-2.0).

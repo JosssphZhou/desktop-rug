@@ -56,6 +56,10 @@ scripts/make-app.sh
 open build/桌面地毯.app
 ```
 
+## 我的另一个作品
+
+[seesee](https://github.com/JosssphZhou/seesee)：原生 Mac 视频播放器，你的 agent 也能操作它。粘贴链接就能带字幕看，还能让 Claude Code 或 Codex 帮你加进待播清单、改字幕。
+
 ## 许可证
 
 [MIT](LICENSE)。使用了 [three.js](https://threejs.org)（MIT）和 [Paper Shaders](https://github.com/paper-design/shaders)（Apache-2.0）。
