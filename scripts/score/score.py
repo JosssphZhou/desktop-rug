@@ -204,11 +204,15 @@ def tempo(a, b, lo, hi):
 
 
 def settle(curve, lo, hi, threshold):
-    # 从松手到首次连续 6 帧低于阈值，且余下观察段没有再次运动。
+    # 六帧持续低于阈值才算停稳。后续六帧平均变化量超阈值才算再次运动，
+    # 单帧编码、光标或分割抖动不能把已静止的参考推迟到数秒后。
     values = np.asarray(curve[lo-F0:hi-F0+1])
-    for i in range(max(0, len(values) - 5)):
-        if np.all(values[i:] <= threshold):
-            return {'frames': i, 'censored': False, 'window': [lo, hi]}
+    if len(values) >= 6:
+        smooth_values = np.convolve(np.pad(values, (1, 1), mode='edge'), np.ones(3)/3, 'valid')
+        sustained = np.convolve(values, np.ones(6)/6, 'valid')
+        for i in range(len(values) - 5):
+            if np.all(smooth_values[i:i+6] <= threshold) and np.all(sustained[i:] <= threshold):
+                return {'frames': i, 'censored': False, 'window': [lo, hi]}
     return {'frames': len(values), 'censored': True, 'window': [lo, hi]}
 
 
