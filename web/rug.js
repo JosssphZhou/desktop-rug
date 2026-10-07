@@ -1105,6 +1105,65 @@ async function glide(from, to, ms, fn) {
 async function waitIdle(maxMs = 4000) { const t0 = performance.now(); while (phase !== 'idle' && performance.now() - t0 < maxMs) await sleep(50); }
 const lerp2 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 
+// 参考视频里的全部动作，按帧号记光标位置（换算到 f0700 画面的像素，逐帧读图，误差约 10 像素）。
+// 每段是一次按下到松开；opt 表示这段时间按着 Option。图标是演示者在 Finder 里拖的，应用不动文件，这里没有。
+const VIDEO_REF = { cx: 648, cy: 554, w: 769, deg: 4 };   // f0236 抓之前的地毯：中心、宽度、逆时针角度
+const VIDEO_STEPS = [
+  { name: '抓右上角对折到左下', keys: [[238, 970, 330], [242, 917, 384], [248, 853, 456], [254, 759, 524], [260, 683, 614], [266, 610, 674], [272, 570, 695], [278, 555, 692], [293, 555, 692]] },
+  { name: '抓折角尖，把地毯拖过图标堆', keys: [[430, 556, 749], [438, 619, 717], [444, 758, 663], [450, 837, 555], [456, 943, 489], [462, 1007, 455], [468, 1033, 421], [474, 1064, 389], [480, 1095, 382], [488, 1118, 355], [497, 1159, 296], [503, 1165, 292], [515, 1165, 292], [518, 1164, 307]] },
+  { name: '拉右下角', keys: [[527, 1099, 665], [530, 1096, 680], [539, 1096, 680], [545, 1105, 669], [551, 1119, 656], [557, 1135, 643], [566, 1135, 643], [572, 1150, 645], [578, 1190, 660], [584, 1210, 670], [588, 1212, 676], [592, 1213, 666]] },
+  { name: '掀开右上角露出文件', keys: [[744, 1162, 262], [748, 1162, 270], [756, 1030, 438], [764, 892, 582], [772, 878, 600], [782, 916, 570]] },
+  { name: '把掀开的角翻回去', keys: [[920, 880, 612], [930, 1020, 485], [936, 1090, 395], [942, 1170, 300], [948, 1168, 285], [957, 1168, 285]] },
+  { name: '按住 Option，从角外拖着旋转', opt: true, keys: [[1180, 1297, 698], [1190, 1393, 709], [1205, 1397, 613], [1214, 1405, 585], [1220, 1376, 642], [1235, 1323, 736], [1250, 1317, 721]] },
+  { name: '按住 Option，按在角点上放大', opt: true, keys: [[1300, 1275, 703], [1313, 1289, 695], [1325, 1341, 740], [1340, 1371, 740]] },
+  { name: '抓中间拖来拖去', keys: [[1414, 855, 449], [1424, 742, 308], [1432, 740, 310], [1444, 992, 514], [1458, 992, 514], [1470, 1153, 548], [1478, 1153, 548]] },
+];
+const VIDEO_OPT = [1033, 1342];   // 按着 Option 的帧
+const VIDEO_END = 1563;
+// 某一帧光标在哪、是否按着：关键帧之间用 Catmull-Rom 曲线插值，速度连续
+function videoCursor(f) {
+  for (const st of VIDEO_STEPS) {
+    const k = st.keys;
+    if (f < k[0][0] || f > k[k.length - 1][0]) continue;
+    let i = 0; while (i < k.length - 2 && f > k[i + 1][0]) i++;
+    const p0 = k[Math.max(i - 1, 0)], p1 = k[i], p2 = k[i + 1], p3 = k[Math.min(i + 2, k.length - 1)];
+    const t = (f - p1[0]) / Math.max(p2[0] - p1[0], 1), t2 = t * t, t3 = t2 * t;
+    const cr = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+    return { down: true, step: st, x: cr(p0[1], p1[1], p2[1], p3[1]), y: cr(p0[2], p1[2], p2[2], p3[2]) };
+  }
+  return { down: false };
+}
+// 视频坐标换到屏幕：按开始时地毯的摆放，把视频里的地毯对到我们的地毯上
+function videoMapper() {
+  const [cx, cy] = toScreen(place.cx, place.cy, 0);
+  const k = place.width / VIDEO_REF.w, d = place.angle - (VIDEO_REF.deg * Math.PI) / 180;
+  const c = Math.cos(d), s = Math.sin(d);
+  return (x, y) => { const dx = (x - VIDEO_REF.cx) * k, dy = (y - VIDEO_REF.cy) * k; return [cx + dx * c + dy * s, cy - dx * s + dy * c]; };
+}
+// 走到第 f 帧：按下、拖动、松开、Option 都按视频来
+let vidPrev = { down: false }, vidOpt = false;
+function videoDrive(f, map) {
+  const opt = f >= VIDEO_OPT[0] && f < VIDEO_OPT[1];
+  if (opt !== vidOpt) { vidOpt = opt; window.rugSetOption(opt); }
+  const cur = videoCursor(f);
+  if (cur.down) {
+    const [x, y] = map(cur.x, cur.y);
+    pointerX = x; pointerY = y;
+    if (!vidPrev.down || vidPrev.step !== cur.step) {
+      if (cur.step.opt) beginTransform(x, y);
+      else if (!beginGrab(x, y)) console.log('没抓到布', cur.step.name, Math.round(x), Math.round(y));
+      console.log('第', f, '帧', cur.step.name);
+    } else if (mode === 'transform') moveTransform(x, y);
+    else if (mode === 'cloth') moveGrab(x, y);
+  } else if (vidPrev.down) {
+    if (mode === 'cloth') endGrab(); else if (mode === 'transform') endTransform();
+  }
+  if (cur.down) touchLive();
+  vidPrev = cur;
+  return cur;
+}
+
+// 演示：照参考视频的动作走一遍（f0236 到 f1563，约 22 秒），用虚拟光标，不动真鼠标，不动文件
 window.rugDemo = async () => {
   if (demoRunning) return;
   demoRunning = true; wake();
@@ -1112,63 +1171,18 @@ window.rugDemo = async () => {
     await sleep(700);
     if (params.get('record')) startRecording();
     console.log('演示开始');
-    // 1. 抓右下角，往左上方掀起对折，松手落回
-    let cs = cornersScreen();
-    beginGrab(cs[2][0] - 3, cs[2][1] - 3);
-    await glide(cs[2], lerp2(cs[2], cs[0], 0.62), 1300, moveGrab);
-    await sleep(700);
-    endGrab();
+    const map = videoMapper();
+    vidPrev = { down: false }; vidOpt = false;
+    const t0 = performance.now();
+    for (;;) {
+      const f = 236 + Math.floor(((performance.now() - t0) / 1000) * 60);
+      if (f > VIDEO_END) break;
+      videoDrive(f, map);
+      await sleep(0);
+    }
+    if (mode === 'cloth') endGrab(); else if (mode === 'transform') endTransform();
+    if (vidOpt) { vidOpt = false; window.rugSetOption(false); }
     await waitIdle();
-    console.log('松手后停稳', JSON.stringify({ phase, deformed }));
-    await sleep(1500);   // 留一会儿让人看到布停在叠起的样子，不会自己弹回
-    console.log('1.5 秒后仍然', JSON.stringify({ phase, deformed }));
-    flatten();           // 相当于双击地毯
-    await sleep(300);
-    await waitIdle();
-    await sleep(400);
-    console.log('演示第2步');
-    // 2. 抓左上角，往右边翻过去
-    cs = cornersScreen();
-    beginGrab(cs[0][0] + 3, cs[0][1] + 3);
-    await glide(cs[0], lerp2(cs[0], cs[1], 0.75), 1100, moveGrab);
-    await sleep(600);
-    endGrab();
-    await waitIdle();
-    await sleep(1200);
-    flatten();
-    await sleep(300);
-    await waitIdle();
-    await sleep(400);
-    console.log('演示第3步');
-    // 3. 按住 Option，拖右上角控制点：旋转并放大
-    window.rugSetOption(true);
-    await sleep(500);
-    cs = cornersScreen();
-    beginTransform(cs[1][0], cs[1][1]);
-    const [ccx, ccy] = toScreen(place.cx, place.cy, 0);
-    const v = [cs[1][0] - ccx, cs[1][1] - ccy];
-    const rot = -0.22, sc = 1.12;
-    const target = [ccx + (v[0] * Math.cos(rot) - v[1] * Math.sin(rot)) * sc, ccy + (v[0] * Math.sin(rot) + v[1] * Math.cos(rot)) * sc];
-    await glide(cs[1], target, 1200, moveTransform);
-    endTransform();
-    await sleep(500);
-    window.rugSetOption(false);
-    await sleep(500);
-    await waitIdle();
-    console.log('演示第4步');
-    // 4. 抓下边中点往上提，像拎起一块布
-    cs = cornersScreen();
-    const bm = lerp2(cs[3], cs[2], 0.5);
-    beginGrab(bm[0], bm[1] - 3);
-    await glide(bm, [bm[0] + 40, bm[1] - place.width * 0.3], 900, moveGrab);
-    await sleep(500);
-    endGrab();
-    await waitIdle();
-    await sleep(1000);
-    flatten();
-    await sleep(300);
-    await waitIdle();
-    await sleep(400);
   } finally {
     if (params.get('record')) await stopRecording();
     demoRunning = false;
@@ -1304,6 +1318,7 @@ window.__t = {
   // 逐帧模式：停掉自动循环，之后每调一次 frame() 走 1/60 秒并画一帧
   offline: () => { offline = true; simNow = performance.now(); lastT = simNow; },
   frame: () => { simNow += 1000 / 60; loop(simNow); },
+  videoDrive: (f, map) => videoDrive(f, map || (window.__vmap ||= videoMapper())), videoCursor,
   rugSet: (x, y, w, deg) => { const p = toWorld(x, y); place = { cx: p.x, cy: p.y, angle: (deg * Math.PI) / 180, width: w }; snapToRest(); phase = 'idle'; needsRender = true; },
   quit: () => post({ type: 'quit' }),
   state: () => ({ phase, deformed, place: { ...place } }),

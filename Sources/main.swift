@@ -23,6 +23,7 @@ struct Options {
     var snapDir: String? = nil    // 调试：脚本里截的图写到这个目录
     var level: Int? = nil   // 调试用：直接指定窗口层级的数值
     var reset = false
+    var dumpWindows = false   // 诊断：只读列出屏幕上所有窗口的所有者、层级和编号，然后退出
     var extraQuery: [String] = []   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
     init(_ args: [String]) {
@@ -47,6 +48,7 @@ struct Options {
             case "--snap-dir": snapDir = next()
             case "--level": level = next().flatMap { Int($0) }
             case "--reset": reset = true
+            case "--dump-windows": dumpWindows = true
             case "--plain": extraQuery.append("plain=1")
             case "--debug": extraQuery.append("debug=1")
             case "--q": if let kv = next() { extraQuery.append(kv) }   // 调试：直接给网页加一个查询参数，如 --q fric=0.02
@@ -379,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let reset = NSMenuItem(title: "地毯放回屏幕中间", action: #selector(resetRug), keyEquivalent: "")
         reset.target = self
         menu.addItem(reset)
-        let demo = NSMenuItem(title: "演示一遍掀起和落回", action: #selector(runDemo), keyEquivalent: "")
+        let demo = NSMenuItem(title: "照参考视频演示一遍", action: #selector(runDemo), keyEquivalent: "")
         demo.target = self
         menu.addItem(demo)
         let icons = NSMenuItem(title: "读取桌面图标位置，让地毯鼓起来", action: #selector(readDesktopIcons), keyEquivalent: "")
@@ -438,6 +440,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
         }
     }
+}
+
+// 诊断：桌面图标到底画在哪个进程的哪一层。只读窗口列表，不需要额外授权，也不打开任何窗口
+if options.dumpWindows {
+    let keys: [(String, CGWindowLevelKey)] = [("桌面", .desktopWindow), ("桌面图标", .desktopIconWindow), ("普通", .normalWindow), ("浮动", .floatingWindow)]
+    for (name, k) in keys { log("层级常量 \(name) = \(CGWindowLevelForKey(k))") }
+    let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+    log("共 \(list.count) 个窗口；所有者、层级、编号、是否在屏幕上、位置大小")
+    for w in list.sorted(by: { ($0[kCGWindowLayer as String] as? Int ?? 0) < ($1[kCGWindowLayer as String] as? Int ?? 0) }) {
+        let owner = w[kCGWindowOwnerName as String] as? String ?? "?"
+        let layer = w[kCGWindowLayer as String] as? Int ?? 0
+        let num = w[kCGWindowNumber as String] as? Int ?? 0
+        let on = (w[kCGWindowIsOnscreen as String] as? Bool) == true ? "在屏幕上" : "不在屏幕上"
+        let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+        let rect = ["X", "Y", "Width", "Height"].map { "\(Int(b[$0] as? Double ?? 0))" }.joined(separator: ",")
+        log("\(owner)\t\(layer)\t\(num)\t\(on)\t\(rect)")
+    }
+    exit(0)
 }
 
 let app = NSApplication.shared
