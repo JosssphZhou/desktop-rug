@@ -3,5 +3,6 @@
 export default {
   "optmatch": 0.9375,
   "foldfric": 4,
-  "damp": 0.9
+  "damp": 0.9,
+  "fdamp": 0.95
 };
