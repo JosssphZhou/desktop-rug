@@ -328,6 +328,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             materialItems.append(item)
         }
         menu.addItem(.separator())
+        let flat = NSMenuItem(title: "把地毯放平", action: #selector(flattenRug), keyEquivalent: "")
+        flat.target = self
+        menu.addItem(flat)
         let reset = NSMenuItem(title: "地毯放回屏幕中间", action: #selector(resetRug), keyEquivalent: "")
         reset.target = self
         menu.addItem(reset)
@@ -356,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         webView.evaluateJavaScript("window.rugSetMaterial && window.rugSetMaterial('\(id)')")
     }
 
+    @objc func flattenRug() { webView.evaluateJavaScript("window.rugFlatten && window.rugFlatten()") }
     @objc func resetRug() { webView.evaluateJavaScript("window.rugReset && window.rugReset()") }
     @objc func runDemo() { webView.evaluateJavaScript("window.rugDemo && window.rugDemo()") }
     @objc func quitApp() { NSApp.terminate(nil) }

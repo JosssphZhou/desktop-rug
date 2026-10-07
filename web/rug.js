@@ -208,12 +208,15 @@ function snapToRest() {
     pos[k * 3 + 2] = prev[k * 3 + 2] = z;
     flipped[k] = 0;
   }
+  deformed = false;
 }
+let deformed = false;   // 松手后布停在掀起或叠起的样子，不再自动摊平
 snapToRest();
 
-// 物理阶段：idle 静止休眠，drag 被抓着，falling 刚松手自由落下，restoring 摊平回原位
+// 物理阶段：idle 静止休眠（可能停在叠起的样子），drag 被抓着，falling 松手后按重力落下直到停住，restoring 只在双击或菜单放平时摊平回原位
 let phase = 'idle';
 let phaseT = 0;
+let calmFrames = 0;
 let grabK = -1;
 let grabTarget = null;
 let grabStart = null;
@@ -507,11 +510,29 @@ function cornersScreen(pad = 0) {
     return [x, y];
   });
 }
+// 点集的凸包（单调链），布停在叠起的样子时用它当可点击范围
+function hullOf(pts) {
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  lo.pop(); up.pop();
+  return lo.concat(up);
+}
+function deformedHull(pad = 10) {
+  const pts = [];
+  for (let k = 0; k < N; k += 3) pts.push(toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]));
+  const h = hullOf(pts);
+  const cx = h.reduce((a, p) => a + p[0], 0) / h.length, cy = h.reduce((a, p) => a + p[1], 0) / h.length;
+  return h.map(([x, y]) => { const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy) || 1; return [x + (dx / d) * pad, y + (dy / d) * pad]; });
+}
+function idleOutline(pad) { return deformed ? deformedHull(pad) : cornersScreen(pad); }
 function publishHit() {
   let flat = [];
   if (phase === 'idle') {
     // 静止时用四个角，按 Option 时往外扩一点把角上的控制点也算进去；流苏也算在地毯里
-    for (const [x, y] of cornersScreen(optionDown ? 26 : 10)) flat.push(Math.round(x), Math.round(y));
+    for (const [x, y] of idleOutline(optionDown ? 26 : 10)) flat.push(Math.round(x), Math.round(y));
   } else {
     for (const k of PERIM) { const [x, y] = toScreen(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]); flat.push(Math.round(x), Math.round(y)); }
   }
@@ -582,13 +603,13 @@ function moveGrab(sx, sy) {
 function endGrab() {
   if (grabK >= 0) inv[grabK] = 1;
   grabK = -1; grabTarget = null;
-  phase = 'falling'; phaseT = 0;
+  phase = 'falling'; phaseT = 0; calmFrames = 0;
   mode = null;
   releasedAt = performance.now();
 }
 
 function beginTransform(sx, sy) {
-  if (phase !== 'idle') { refitPlacement(); snapToRest(); phase = 'idle'; }
+  if (phase !== 'idle' || deformed) { refitPlacement(); snapToRest(); phase = 'idle'; }
   const cs = cornersScreen();
   const nearCorner = cs.some(([x, y]) => Math.hypot(x - sx, y - sy) < 30);
   const m = toWorld(sx, sy);
@@ -617,7 +638,7 @@ function endTransform() { mode = null; tf = null; savePlace(); }
 const cv = renderer.domElement;
 cv.style.cursor = 'grab';
 cv.addEventListener('pointerdown', (e) => {
-  const inside = pointInPoly(e.clientX, e.clientY, cornersScreen(optionDown ? 26 : 10)) || phase !== 'idle';
+  const inside = pointInPoly(e.clientX, e.clientY, idleOutline(optionDown ? 26 : 10)) || phase !== 'idle';
   if (!inside) return;
   cv.setPointerCapture(e.pointerId);
   post({ type: 'drag', active: true });
@@ -636,8 +657,19 @@ const up = () => {
   post({ type: 'drag', active: false });
   cv.style.cursor = 'grab';
 };
+cv.addEventListener('dblclick', () => { flatten(); });
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
+
+// 明确的动作才把布整块摊平：双击地毯，或菜单里选「把地毯放平」
+function flatten() {
+  if (phase === 'drag' || phase === 'restoring' || (phase === 'idle' && !deformed)) return;
+  refitPlacement();
+  phase = 'restoring'; phaseT = 0;
+  releasedAt = performance.now();
+  wake();
+}
+window.rugFlatten = flatten;
 
 // ---------- 主循环 ----------
 let lastT = performance.now();
@@ -652,7 +684,6 @@ function loop(t) {
   phaseT += dtFrame;
 
   if (phase !== 'idle') {
-    if (phase === 'falling' && phaseT > 0.22) { refitPlacement(); phase = 'restoring'; phaseT = 0; }
     const restoreK = phase === 'restoring' ? Math.min(phaseT / 0.2, 1) * (phaseT > 1.6 ? 300 : 115) : 0;
     updateFloor();
     const SUB = 2;
@@ -660,6 +691,27 @@ function loop(t) {
     // 用上一帧的法线判断哪些点翻过去了
     const nrm = geo.attributes.normal.array;
     for (let k = 0; k < N; k++) flipped[k] = nrm[k * 3 + 2] < -0.15 ? 1 : 0;
+    if (phase === 'falling') {
+      // 松手后只受重力：最快的点几乎不动了就算停稳，布留在落下来的样子
+      let vmax = 0;
+      for (let k = 0; k < N; k++) {
+        if (inv[k] === 0) continue;
+        const o = k * 3;
+        const v = Math.abs(pos[o] - prev[o]) + Math.abs(pos[o + 1] - prev[o + 1]) + Math.abs(pos[o + 2] - prev[o + 2]);
+        if (v > vmax) vmax = v;
+      }
+      calmFrames = vmax < 0.25 * (dtFrame * 60) ? calmFrames + 1 : 0;
+      if ((calmFrames > 6 && phaseT > 0.25) || phaseT > 3) {
+        let maxD = 0;
+        for (let k = 0; k < N; k++) {
+          const d = Math.hypot(rest[k * 2] - pos[k * 3], rest[k * 2 + 1] - pos[k * 3 + 1], pos[k * 3 + 2] - bumpAt(pos[k * 3], pos[k * 3 + 1]));
+          if (d > maxD) maxD = d;
+        }
+        if (maxD < 3) snapToRest(); else deformed = true;   // 几乎还是平的就吸附回去，免得留下看不出来的歪斜
+        phase = 'idle';
+        console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', deformed ? '停在掀起的样子' : '平整');
+      }
+    }
     if (phase === 'restoring') {
       let maxD = 0;
       for (let k = 0; k < N; k++) {
@@ -706,7 +758,7 @@ function loop(t) {
 // ---------- 宿主调用的接口 ----------
 window.rugSetOption = (b) => { optionDown = b; needsRender = true; publishHit(); updateHandles(); };
 window.rugSetMaterial = (id) => { setMaterial(id); wake(); };
-window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };
+window.rugReset = () => { place = defaultPlacement(); savePlace(); snapToRest(); phase = 'idle'; wake(); };   // 放回屏幕中间，同时摊平
 window.rugSetIcons = (list) => {
   icons = list.map(([x, y]) => { const p = toWorld(x, y); return { x: p.x, y: p.y }; });
   buildStacks();
@@ -725,7 +777,7 @@ window.__testMove = () => {
   console.log('测试移动', kind, '中心变化', (place.cx - before.cx).toFixed(1), (place.cy - before.cy).toFixed(1), '角度变化', (place.angle - before.angle).toFixed(3), '材质', materialId);
   place = before; savePlace(); snapToRest(); wake();
 };
-window.rugState = () => ({ phase, place, fps: window.__fps, materialId, icons: icons.length });
+window.rugState = () => ({ phase, deformed, place, fps: window.__fps, materialId, icons: icons.length });
 
 // ---------- 演示脚本：用虚拟抓点走一遍，不动真鼠标 ----------
 let demoRunning = false;
@@ -757,8 +809,14 @@ window.rugDemo = async () => {
     await glide(cs[2], lerp2(cs[2], cs[0], 0.62), 1300, moveGrab);
     await sleep(700);
     endGrab();
-    await sleep(2300);
     await waitIdle();
+    console.log('松手后停稳', JSON.stringify({ phase, deformed }));
+    await sleep(1500);   // 留一会儿让人看到布停在叠起的样子，不会自己弹回
+    console.log('1.5 秒后仍然', JSON.stringify({ phase, deformed }));
+    flatten();           // 相当于双击地毯
+    await sleep(300);
+    await waitIdle();
+    await sleep(400);
     console.log('演示第2步');
     // 2. 抓左上角，往右边翻过去
     cs = cornersScreen();
@@ -766,8 +824,12 @@ window.rugDemo = async () => {
     await glide(cs[0], lerp2(cs[0], cs[1], 0.75), 1100, moveGrab);
     await sleep(600);
     endGrab();
-    await sleep(2300);
     await waitIdle();
+    await sleep(1200);
+    flatten();
+    await sleep(300);
+    await waitIdle();
+    await sleep(400);
     console.log('演示第3步');
     // 3. 按住 Option，拖右上角控制点：旋转并放大
     window.rugSetOption(true);
@@ -792,7 +854,10 @@ window.rugDemo = async () => {
     await glide(bm, [bm[0] + 40, bm[1] - place.width * 0.3], 900, moveGrab);
     await sleep(500);
     endGrab();
-    await sleep(800);
+    await waitIdle();
+    await sleep(1000);
+    flatten();
+    await sleep(300);
     await waitIdle();
     await sleep(400);
   } finally {
