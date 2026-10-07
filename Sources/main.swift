@@ -12,7 +12,11 @@ struct Options {
     var fakeBumps = false
     var windowIdFile: String? = nil
     var quitAfter: Double? = nil
-    var rug: String? = nil   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
+    var rug: String? = nil
+    var record: String? = nil   // 演示时录成视频，写到这个路径
+    var selfTest = false
+    var pose: String? = nil
+    var alwaysRender = false   // "x,y,w"：地毯中心的屏幕坐标（左上原点）和宽度
 
     init(_ args: [String]) {
         var i = 1
@@ -26,6 +30,10 @@ struct Options {
             case "--window-id-file": windowIdFile = next()
             case "--quit-after": quitAfter = next().flatMap(Double.init)
             case "--rug": rug = next()
+            case "--record": record = next(); demo = true
+            case "--self-test": selfTest = true
+            case "--pose": pose = next(); alwaysRender = true
+            case "--always-render": alwaysRender = true
             default: break
             }
             i += 1
@@ -35,8 +43,10 @@ struct Options {
 
 let options = Options(CommandLine.arguments)
 
+let startTime = Date()
 func log(_ s: String) {
-    FileHandle.standardOutput.write(("[rug] " + s + "\n").data(using: .utf8)!)
+    let t = String(format: "%6.2f", Date().timeIntervalSince(startTime))
+    FileHandle.standardOutput.write(("[rug \(t)] " + s + "\n").data(using: .utf8)!)
 }
 
 // 网页资源根目录：可执行文件在 build/ 下，资源在仓库根目录。
@@ -87,7 +97,7 @@ final class RugWindow: NSWindow {
 struct Material { let id: String; let name: String }
 let materials: [Material] = [
     Material(id: "persian", name: "波斯纹样"),
-    Material(id: "warp", name: "格纹流动（Paper Warp）"),
+    Material(id: "warp", name: "条纹流动（Paper Warp）"),
     Material(id: "grain", name: "颗粒渐变（Paper Grain Gradient）"),
     Material(id: "mesh", name: "丝绸渐变（Paper Mesh Gradient）"),
     Material(id: "dots", name: "菱格织纹（Paper Dot Grid）"),
@@ -139,12 +149,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         webView.setValue(false, forKey: "drawsBackground")
         if #available(macOS 12.0, *) { webView.underPageBackgroundColor = .clear }
         webView.autoresizingMask = [.width, .height]
+        // 被其他窗口挡住时 WebKit 默认暂停提交画面。演示录制时关掉这个检测，截到的才是当前画面；
+        // 日常使用保留，被挡住时省电。
+        if options.demo || options.alwaysRender {
+            webView.setValue(false, forKey: "windowOcclusionDetectionEnabled")
+            log("已关闭遮挡检测（演示模式）")
+        }
         window.contentView = webView
 
         var query: [String] = ["material=\(currentMaterial)"]
         if options.demo { query.append("demo=1") }
         if options.fakeBumps { query.append("fakeBumps=1") }
         if let r = options.rug { query.append("rug=\(r)") }
+        if options.record != nil { query.append("record=1") }
+        if let p = options.pose { query.append("pose=\(p)") }
         let url = URL(string: "rug://app/web/index.html?" + query.joined(separator: "&"))!
         webView.load(URLRequest(url: url))
 
@@ -160,6 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer!, forMode: .common)
 
+        if options.selfTest {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.runSelfTest() }
+        }
         if let q = options.quitAfter {
             DispatchQueue.main.asyncAfter(deadline: .now() + q) { NSApp.terminate(nil) }
         }
@@ -203,6 +224,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return inside
     }
 
+    // 自检：用网页报来的地毯轮廓判断几个点，确认中心接收鼠标、四周穿透。不移动真鼠标。
+    func runSelfTest() {
+        guard hitPolygon.count >= 3 else { log("自检失败：还没收到地毯轮廓"); return }
+        let cx = hitPolygon.map(\.x).reduce(0, +) / CGFloat(hitPolygon.count)
+        let cy = hitPolygon.map(\.y).reduce(0, +) / CGFloat(hitPolygon.count)
+        let minX = hitPolygon.map(\.x).min()!, maxX = hitPolygon.map(\.x).max()!
+        let cases: [(String, CGPoint, Bool)] = [
+            ("地毯中心", CGPoint(x: cx, y: cy), true),
+            ("地毯左边缘内侧", CGPoint(x: minX + 30, y: cy), true),
+            ("地毯左边外侧", CGPoint(x: minX - 30, y: cy), false),
+            ("地毯右边外侧", CGPoint(x: maxX + 30, y: cy), false),
+            ("屏幕左上角", CGPoint(x: 10, y: 10), false),
+        ]
+        var ok = true
+        for (name, p, expect) in cases {
+            let got = pointInPolygon(p, hitPolygon)
+            ok = ok && got == expect
+            log("自检 \(name) (\(Int(p.x)),\(Int(p.y)))：\(got ? "接收鼠标" : "穿透") \(got == expect ? "通过" : "不通过")")
+        }
+        log("当前窗口 ignoresMouseEvents=\(window.ignoresMouseEvents)，鼠标位置 \(NSEvent.mouseLocation)")
+        log(ok ? "自检全部通过" : "自检有不通过的项")
+    }
+
     // MARK: 网页消息
 
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -222,6 +266,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             dragging = (body["active"] as? Bool) ?? false
         case "material":
             if let id = body["id"] as? String { markMaterial(id) }
+        case "recording":
+            if let b64 = body["data"] as? String, let data = Data(base64Encoded: b64), let path = options.record {
+                do { try data.write(to: URL(fileURLWithPath: path)); log("视频已写入 \(path)（\(data.count) 字节，\(body["mime"] ?? "")）") }
+                catch { log("视频写入失败：\(error)") }
+            }
+        case "demoDone":
+            if options.record != nil || options.quitAfter == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if options.record != nil { NSApp.terminate(nil) } }
+            }
         case "quit":
             NSApp.terminate(nil)
         default:
