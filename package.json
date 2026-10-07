@@ -1,14 +1,14 @@
 {
   "name": "desktop-rug",
   "version": "1.0.0",
-  "description": "",
+  "description": "A rug for your Mac desktop",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@paper-design/shaders": "^0.0.81",
