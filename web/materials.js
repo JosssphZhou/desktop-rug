@@ -43,7 +43,7 @@ const PAPER = {
     shader: warpFragmentShader,
     speed: 0.5,
     uniforms: () => ({
-      u_colors: ['#4a0d10', '#b5413a', '#1d2950', '#ead2a0'].map(col),
+      u_colors: ['#540205', '#cb3529', '#1a295a', '#ffe1a0'].map(col),
       u_colorsCount: 4,
       u_proportion: 0.5,
       u_softness: 0,
@@ -61,8 +61,8 @@ const PAPER = {
     shader: grainGradientFragmentShader,
     speed: 0.6,
     uniforms: () => ({
-      u_colorBack: col('#170c06'),
-      u_colors: ['#7a2c12', '#e2b46f', '#2e6a4e'].map(col),
+      u_colorBack: col('#1c1008'),
+      u_colors: ['#892c0b', '#fdc267', '#2a7753'].map(col),
       u_colorsCount: 3,
       u_softness: 0,
       u_intensity: 0.22,
@@ -77,7 +77,7 @@ const PAPER = {
     shader: meshGradientFragmentShader,
     speed: 0.35,
     uniforms: () => ({
-      u_colors: ['#f2dfbe', '#b8322a', '#5e1b48', '#1c3a60'].map(col),
+      u_colors: ['#ffe8be', '#ce2b1f', '#6a124d', '#153c6c'].map(col),
       u_colorsCount: 4,
       u_distortion: 0.85,
       u_swirl: 0.35,
@@ -93,9 +93,9 @@ const PAPER = {
     // 静态材质只在尺寸变化时画一次，可能早于贴图读取，所以先持续渲染一小段再停
     warmup: true,
     uniforms: () => ({
-      u_colorBack: col('#1f3d2e'),
-      u_colorFill: col('#10261b'),
-      u_colorStroke: col('#d6ab5f'),
+      u_colorBack: col('#204532'),
+      u_colorFill: col('#112c1f'),
+      u_colorStroke: col('#f0b854'),
       u_dotSize: 8,
       u_gapX: 24,
       u_gapY: 24,
@@ -150,8 +150,10 @@ function persianSurface() {
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
-  const RED = '#7e1f1c', RED_HI = '#8e2a26', RED_DK = '#5e1715', EDGE = '#651416',
-    NAVY = '#1b1d27', NAVY_HI = '#262a3a', CREAM = '#c8a188', CREAM_DK = '#a87f68', ROSE = '#996a5b', ROSE_DK = '#7c4a3e', TAN = '#bf9680';
+  // 画布色比屏幕上看到的亮、偏冷：光照在线性空间把红绿蓝各压到约 0.63、0.62、0.57，太阳光偏暖还会把藏青压灰。
+  // 下面这组按实测换算反推，铺在桌面上约显示为：红底 #7e1a1e、藏青 #161d36、米白 #cfae91
+  const RED = '#9a161f', RED_HI = '#b52727', RED_DK = '#6b040d', EDGE = '#780c18',
+    NAVY = '#0e1c43', NAVY_HI = '#263870', CREAM = '#fdd7ba', CREAM_DK = '#dcb092', ROSE = '#dc8276', ROSE_DK = '#ad4d46', TAN = '#efc0a2';
   const rnd = mulberry32(11);
   const box = (i, color) => { g.fillStyle = color; g.fillRect(i, i, W - 2 * i, H - 2 * i); };
   const ring = (i, w, color) => { g.strokeStyle = color; g.lineWidth = w; g.strokeRect(i + w / 2, i + w / 2, W - 2 * i - w, H - 2 * i - w); };
