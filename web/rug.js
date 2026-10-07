@@ -953,12 +953,23 @@ function endGrab() {
 // ---------- 对折和帐篷：照参考视频直接写出形状，不交给布料模拟 ----------
 // 对折（参考 f0236 到 f0300）：抓角或边往地毯里拖，折痕是抓点原位和光标连线的垂直平分线，
 // 抓点那一侧整片镜像翻过去、背面朝上平躺在上面。抬起时折痕处卷成半径为抬高一半的圆筒，光标停住后放平。
-// 抓地毯中间仍由布料模拟处理（帐篷形状在后续提交里写）。
+// 帐篷（参考 f1414 到 f1458）：抓中间往某个方向拖，抓点被提起成一道脊，前面一侧沿折线立起，
+// 后面一侧垂下并被拖着叠到前面一侧上，放平后是三层的 Z 形叠层。往回拉时叠层展开，展平以后整块跟着走。
 // 往外拉（前面没有布可以折）时交回布料模拟，拖边的手感不变。
 const KIN = params.get('kin') !== '0';
 const CORNER_ZONE = 0.18;
 // 折痕处的最小圆角半径：参考里折痕是尖的，圆角只有几个点。至少让圆筒跨过一格网格，否则斜着穿过网格的折痕会画成锯齿
 const kinRmin = () => Math.max(LAYER() / 2, (0.9 * place.width) / NX / Math.PI);
+const TENT_LEG = +(params.get('tentleg') ?? 1.6);
+// 帐篷往回拉过了抓下去的位置时整块不跟着走（参考 f1444 到 f1478 布留在原地摊开）。横向拖动仍然整块平移，保持跟手。
+// tentslide=0 连横向也不跟（抓中间轮廓分 0.696，但横着拖时布不动），=1 是 b4fc142 的整块跟着走（0.478）
+const TENT_SLIDE = +(params.get('tentslide') ?? 0);
+// 离抓点远的布条拖得少一些的比例。0 表示整块后面一侧都跟着光标叠过去（参考 f1432 右边缘和光标一样往左挪了约 115 点）
+const TENT_FALL = +(params.get('tentfall') ?? 0);
+// 叠的方向往地毯的长边上靠：光标方向里沿短边的分量乘这个比例
+const TENT_AXIS = +(params.get('tentaxis') ?? 0.5);
+const TENT_CONT_LIFT = +(params.get('tentcont') ?? 0.4);
+const TENT_KEEP = +(params.get('tentkeep') ?? 0.04);   // 帐篷两条腿的布长是抬高的 1.6 倍，坡度约 39°
 
 // 对折：圆筒半径 R 时抓点（t = c）落在光标处，解出折痕位置 c
 function foldCrease(D, R) {
@@ -971,18 +982,25 @@ function foldCrease(D, R) {
 function kinApply() {
   const L = LAYER(), Gx = rest[kin.g * 2], Gy = rest[kin.g * 2 + 1];
   let ux, uy, D, Tx = 0, Ty = 0;
-  if (!kin.cont) {
+  if (kin.mode === 'fold' && !kin.cont) {
     D = Math.hypot(kin.Vx, kin.Vy);
     if (D < 1e-6) { ux = 1; uy = 0; D = 0; } else { ux = kin.Vx / D; uy = kin.Vy / D; }
   } else {
-    // 抓着翻过去的那片往回拉（展开）：折叠方向固定，横向的拖动让整块平移
+    // 帐篷，以及抓着翻过去的那片往回拉（展开）：折叠方向固定，横向的拖动让整块平移
     ux = kin.ux; uy = kin.uy;
     D = Math.max(kin.Vx * ux + kin.Vy * uy, 0);
+    // 抓着上层把帐篷叠层往回拉开时不会完全摊平，右边留一道窄折（参考 f1478 以后右边缘比原来短约 2.5%）。要全部摊平就双击
+    if (kin.mode === 'tent' && kin.cont) D = Math.max(D, Math.min(TENT_KEEP * place.width, kin.Dmax));
     Tx = kin.Vx - D * ux; Ty = kin.Vy - D * uy;   // 垂直于折叠方向的拖动，整块平移
+    if (kin.mode === 'tent') {
+      const a = kin.Vx * ux + kin.Vy * uy;
+      if (TENT_SLIDE === 0) { Tx = 0; Ty = 0; }
+      else if (TENT_SLIDE === 2 && a < 0) { Tx -= a * ux; Ty -= a * uy; }   // 只保留横向平移，往回拉过头不再拖着整块走
+    }
   }
   const h = kin.h;
   let ahead = 0;
-  {
+  if (kin.mode === 'fold') {
     const R = Math.max(h / 2, kinRmin()), c = D > 0 ? foldCrease(D, R) : 0, PR = Math.PI * R;
     for (let k = 0; k < N; k++) {
       const X = rest[k * 2], Y = rest[k * 2 + 1], s = (X - Gx) * ux + (Y - Gy) * uy, t = c - s;
@@ -992,7 +1010,40 @@ function kinApply() {
         else { q = c + (t - PR); z = 2 * R; }
         kinMoved[k] = 1; flipped[k] = t > PR / 2 ? 1 : 0;
       } else { kinMoved[k] = 0; flipped[k] = 0; ahead++; }
-      const x = X + (q - s) * ux + Tx, y = Y + (q - s) * uy + Ty;   // 抓着翻过去的片横着拖时整块跟着平移
+      const x = X + (q - s) * ux, y = Y + (q - s) * uy;
+      pos[k * 3] = x; pos[k * 3 + 1] = y; pos[k * 3 + 2] = z + bumpAt(x, y);
+    }
+  } else {
+    // 帐篷只在抓点附近最高：沿脊线方向离抓点越远，抬高和拖动越小（参考 f1424 抓点附近的上边被拎起，
+    // 右边只跟着挪了不到一半）。每一条垂直于脊线的布条各自保持长度，相邻布条之间只有很小的错动
+    // 衰减得太快，相邻布条错动太大，布会被斜着拉长（0.4 + 0.6 倍、0.4 毯宽时伸长 19%），所以拖动只降到六成五
+    const sig = place.width * 0.6, ramp = Math.max(2 * L, (3 * place.width) / NX), Rm = 2 * kinRmin();
+    for (let k = 0; k < N; k++) {
+      const X = rest[k * 2], Y = rest[k * 2 + 1], s = (X - Gx) * ux + (Y - Gy) * uy, pp = -(X - Gx) * uy + (Y - Gy) * ux;
+      // 抬高衰减得更快：离抓点远的地方只是平的 Z 形叠层，脊不会一直抬到地毯边上
+      const w = 1 - TENT_FALL + TENT_FALL * Math.exp(-((pp / sig) ** 2)), Dp = D * w, hp = h * w * w;
+      // 前腿：布长 c 从脊（Dp, hp）落到折线。抬得比拖得高时腿立着，腿长有上限，前面一侧被往回拉一点；
+      // 拖得比抬得多时腿翻过去平躺，就是普通的对折
+      const Lmax = TENT_LEG * h + Rm;   // 腿长按抓点处的抬高算，各布条一样长，相邻布条错动更小
+      let c = Dp > 1e-6 ? (Dp * Dp + hp * hp) / (2 * Dp) : Infinity, creaseQ, Sa = 0;
+      if (hp > Dp && c > Lmax) { c = Lmax; creaseQ = Dp + Math.sqrt(Math.max(c * c - hp * hp, 0)); Sa = creaseQ - c; }
+      else creaseQ = c;
+      // 后腿：布长 Lb 从脊往后垂到地上，后面一侧整体被拖着走 Sb
+      const Lb = TENT_LEG * h + Rm, b = Math.sqrt(Math.max(Lb * Lb - hp * hp, 0)), Sb = Dp + Lb - b;
+      // 这里底下有没有叠着的前面一侧：过渡放宽到三格，免得叠层边上的布被拉长
+      const stack = (q) => (q >= creaseQ ? 1 : q > creaseQ - ramp ? (q - creaseQ + ramp) / ramp : 0);
+      let q, z;
+      if (s >= c) { q = s + Sa; z = 0; kinMoved[k] = 0; flipped[k] = 0; ahead++; }
+      else if (s >= 0) {
+        const f = s / c;
+        q = Dp + (creaseQ - Dp) * f; z = Math.max(hp * (1 - f), L * stack(q));
+        kinMoved[k] = 1; flipped[k] = creaseQ < Dp ? 1 : 0;
+      } else if (s >= -Lb) {
+        const f = -s / Lb;
+        q = Dp - b * f; z = Math.max(hp * (1 - f), 2 * L * stack(q));
+        kinMoved[k] = 1; flipped[k] = 0;
+      } else { q = s + Sb; z = 2 * L * stack(q); kinMoved[k] = 1; flipped[k] = 0; }
+      const x = X + (q - s) * ux + Tx, y = Y + (q - s) * uy + Ty;
       pos[k * 3] = x; pos[k * 3 + 1] = y; pos[k * 3 + 2] = z + bumpAt(x, y);
     }
   }
@@ -1008,7 +1059,7 @@ function kinHeight() {
 // 抓下去以后第一次明显移动时决定这次手势是对折、帐篷还是交给布料模拟
 function kinDecide(Vx, Vy, log) {
   const D = Math.hypot(Vx, Vy), ux = Vx / D, uy = Vy / D, Gx = rest[grabK * 2], Gy = rest[grabK * 2 + 1];
-  if (middleGrab) return null;   // 抓中间暂时仍交给布料模拟
+  if (middleGrab) return { mode: 'tent', ux, uy };
   // 抓边往里拉不写成平躺的对折：翻过去的是一整条矩形，背面贴图又和正面相同，看起来像另一张地毯叠在上面（老板反馈「两张地毯」）。
   // 这种拉法照旧交给布料模拟，折出来是软的、带卷边
   if (!cornerGrab) { if (log) console.log('手势判定 交给布料模拟 不是抓角'); return null; }
@@ -1040,13 +1091,29 @@ function kinMove(sx, sy) {
     Object.assign(kin, d, { pending: false, V0x: 0, V0y: 0, Dmax: 0 });
     inv[grabK] = 1;
   }
-  // 抬高：每移动 1 点抬 0.16 点，最多毯宽的 10%
-  kin.hFull = Math.min(Math.max(dist - 6, 0) * 0.16, place.width * 0.1);
+  const tent = kin.mode === 'tent';
+  // 抬高：对折每移动 1 点抬 0.16 点，帐篷抬得快一些，每移动 1 点抬 0.45 点，都最多到毯宽的 10%
+  kin.hFull = Math.min(Math.max(dist - 6, 0) * (tent ? 0.45 : 0.16), place.width * 0.1);
+  if (tent && kin.cont) kin.hFull *= TENT_CONT_LIFT;   // 抓在叠上来的上层往回拉：脊只微微抬起，上层贴着下层滑回去（参考 f1459 到 f1478）
   kin.h = kinHeight();
   // 抓到的点和光标保持按下时的相对位置
   kin.Vx = kin.V0x + (p.x - kin.x0); kin.Vy = kin.V0y + (p.y - kin.y0);
+  // 帐篷往外拖时叠的方向跟着光标走，抓点一直在光标下；往回拉时方向不再变，叠层沿原方向展开
+  // 叠的方向偏向地毯自己的长边或短边：参考 f1432 光标往左上 51°，折痕却接近竖直，右半块整体往左上平移，左边缘不动
+  if (tent && !kin.cont) {
+    const m = Math.hypot(kin.Vx, kin.Vy);
+    if (m >= kin.Dmax && m > 1) {
+      const c = Math.cos(place.angle), si = Math.sin(place.angle);
+      let a = kin.Vx * c + kin.Vy * si, b = -kin.Vx * si + kin.Vy * c;
+      b *= TENT_AXIS;   // 沿长边方向叠：折痕接近和短边平行
+      const n = Math.hypot(a, b);
+      kin.ux = (a * c - b * si) / n; kin.uy = (a * si + b * c) / n;
+    }
+  }
   kinApply();
   kin.Dmax = Math.max(kin.Dmax, kin.D);
+  // 帐篷往回拉时叠层展开，展平以后整块跟着光标平移（不交给布料模拟：从中间拖整块布，模拟会把前面一侧挤成一团）
+  if (kin.mode === 'tent') return;
   // 往外拉、前面没有布可以折了，或者往回拉到几乎摊平：交给布料模拟，整块跟着走
   let toSim = kin.ahead < N * 0.03 || (kin.D < place.width * 0.02 && kin.Dmax > place.width * 0.04);
   // 抓着翻过去的那片往回拉：展开到只剩毯宽 3% 就算展开完了，之后整块跟着光标走（参考 f0444 到 f0466）
@@ -1071,9 +1138,12 @@ function kinToSim(sx, sy) {
 function kinContinue(k, sx, sy) {
   const p = screenToPlane(sx, sy, pos[k * 3 + 2]);
   if (!p) return false;
-  // 以抓到的这个点为抓点重新描述同一次折叠（平躺的翻折片上任一点和它的原位，垂直平分线就是原来的折痕）
-  const Vx = pos[k * 3] - rest[k * 2], Vy = pos[k * 3 + 1] - rest[k * 2 + 1], D = Math.hypot(Vx, Vy) || 1;
-  kin = { mode: 'fold', g: k, V0x: Vx, V0y: Vy, ux: Vx / D, uy: Vy / D };
+  // 对折：以抓到的这个点为抓点重新描述同一次折叠（平躺的翻折片上任一点和它的原位，垂直平分线就是原来的折痕）
+  if (lastFold.mode === 'fold') {
+    const Vx = pos[k * 3] - rest[k * 2], Vy = pos[k * 3 + 1] - rest[k * 2 + 1], D = Math.hypot(Vx, Vy) || 1;
+    kin = { mode: 'fold', g: k, V0x: Vx, V0y: Vy, ux: Vx / D, uy: Vy / D };
+  }
+  else kin = { mode: 'tent', g: lastFold.g, ux: lastFold.ux, uy: lastFold.uy, V0x: lastFold.Vx, V0y: lastFold.Vy };
   Object.assign(kin, { pending: false, cont: true, x0: p.x, y0: p.y, hFull: 0, h: 0, Vx: kin.V0x, Vy: kin.V0y });
   kin.Dmax = Math.hypot(kin.V0x, kin.V0y);
   return true;
@@ -1083,7 +1153,8 @@ function kinRelease() {
   inv[grabK] = 1;
   grabTarget = null;
   kin.releasing = true;
-  kin.tiny = kin.D < place.width * 0.05;
+  // 帐篷拉开后剩下的窄叠层不放平：参考 f1478 以后右边一直留着一道双层折叠
+  kin.tiny = kin.mode === 'fold' && kin.D < place.width * 0.05;
   phase = 'falling'; phaseT = 0; mode = null;
   releasedAt = performance.now();
   kinTick(0);
@@ -1099,7 +1170,7 @@ function kinTick(dt) {
   kin.h *= Math.exp(-n / 3);
   if (kin.tiny) {
     const f = Math.exp(-n / 20);
-    if (!kin.cont) { kin.Vx *= f; kin.Vy *= f; }
+    if (kin.mode === 'fold' && !kin.cont) { kin.Vx *= f; kin.Vy *= f; }
     else { const d = Math.max(kin.Vx * kin.ux + kin.Vy * kin.uy, 0) * (1 - f); kin.Vx -= d * kin.ux; kin.Vy -= d * kin.uy; }
   }
   kinApply();
@@ -1117,7 +1188,7 @@ function kinFinish() {
   else {
     for (let q = 0; q < N * 3; q++) prev[q] = pos[q];
     deformed = true; maskDirty = true;
-    lastFold = { mode: 'fold' };
+    lastFold = k.mode === 'fold' ? { mode: 'fold' } : { mode: 'tent', g: k.g, ux: k.ux, uy: k.uy, Vx: k.D * k.ux, Vy: k.D * k.uy };
   }
   phase = 'idle';
   console.log('停稳用时', (performance.now() - releasedAt).toFixed(0) + 'ms', k.mode, deformed ? '停在折起的样子' : '平整');
@@ -1457,7 +1528,12 @@ const VIDEO_STEPS = [
   { name: '把掀开的角翻回去', keys: [[920, 880, 612], [930, 1020, 485], [936, 1090, 395], [942, 1170, 300], [948, 1168, 285], [957, 1168, 285]] },
   { name: '按住 Option，从角外拖着旋转', opt: true, keys: [[1180, 1297, 698], [1190, 1393, 709], [1205, 1397, 613], [1214, 1405, 585], [1220, 1376, 642], [1235, 1323, 736], [1250, 1317, 721]] },
   { name: '按住 Option，按在角点上放大', opt: true, keys: [[1300, 1275, 703], [1313, 1289, 695], [1325, 1341, 740], [1340, 1371, 740]] },
-  { name: '抓中间拖来拖去', keys: [[1414, 855, 449], [1424, 742, 308], [1432, 740, 310], [1444, 992, 514], [1458, 992, 514], [1470, 1153, 548], [1478, 1153, 548]] },
+  // 抓中间：参考 f1436 到 f1458 光标往右下走了三百多点，叠层一动不动，只能是中途松了手；f1459 起在右边上层重新抓住往右拉开，
+  // 右边缘随之往右挪（参考分析第 4 节）。所以拆成两次按下。tentsplit=0 用原来一口气拖到底的轨迹，方便和以前的分数对比
+  ...(params.get('tentsplit') === '0'
+    ? [{ name: '抓中间拖来拖去', keys: [[1414, 855, 449], [1424, 742, 308], [1432, 740, 310], [1444, 992, 514], [1458, 992, 514], [1470, 1153, 548], [1478, 1153, 548]] }]
+    : [{ name: '抓中间往左上拖，右半块叠上来', keys: [[1414, 855, 449], [1424, 742, 308], [1432, 740, 310], [1436, 740, 310]] },
+       { name: '在右边上层重新抓住往右拉开', keys: [[1459, 992, 514], [1470, 1153, 548], [1478, 1153, 548]] }]),
 ];
 const VIDEO_OPT = [1033, 1342];   // 按着 Option 的帧
 const VIDEO_END = 1563;
@@ -1663,6 +1739,16 @@ window.__t = {
   rugSet: (x, y, w, deg) => { const p = toWorld(x, y); place = { cx: p.x, cy: p.y, angle: (deg * Math.PI) / 180, width: w }; snapToRest(); phase = 'idle'; needsRender = true; },
   quit: () => post({ type: 'quit' }),
   state: () => ({ phase, deformed, place: { ...place } }),
+  // 布在给定摆放的长边、短边方向上的范围（相对那次摆放的中心），用来量叠起来以后变短了多少
+  extent: (p = place) => {
+    const c = Math.cos(p.angle), si = Math.sin(p.angle);
+    let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (let k = 0; k < N; k++) {
+      const x = pos[k * 3] - p.cx, y = pos[k * 3 + 1] - p.cy, a = x * c + y * si, b = -x * si + y * c;
+      a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b);
+    }
+    return { a0, a1, b0, b1, w: p.width };
+  },
   info: () => ({ grabK, target: grabTarget && grabTarget.toArray(), p: Array.from(pos.slice(grabK * 3, grabK * 3 + 3)), inv: inv[grabK] }),
   metrics() {
     // 最大伸长比（相邻点距离相对静止长度）、被折得很陡的点所占比例、翻面点数
