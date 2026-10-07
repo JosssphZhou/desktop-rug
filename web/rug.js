@@ -3,8 +3,10 @@
 // 在 z=0 平面上世界坐标和屏幕点一比一。
 import * as THREE from 'three';
 import { createSurface, MATERIAL_IDS } from './materials.js';
+import tuning from './tuning.js';
 
 const params = new URLSearchParams(location.search);
+for (const [key, value] of Object.entries(tuning)) if (!params.has(key)) params.set(key, String(value));
 const W = innerWidth, H = innerHeight;
 const post = (m) => { try { window.webkit.messageHandlers.rug.postMessage(m); } catch (e) { /* 浏览器里调试时没有宿主 */ } };
 
@@ -139,7 +141,7 @@ for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
 const CA = Int32Array.from(cA), CB = Int32Array.from(cB), CL = Float32Array.from(cL), CS = Float32Array.from(cS);
 const NC = CA.length;
 const ITER = +(params.get('iter') ?? 8);           // 每个子步里约束迭代的次数
-const FRIC_DRAG = +(params.get('fric') ?? 0.03);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
+const FRIC_DRAG = +(params.get('fric') ?? 0.09);   // 抓着拖时地面摩擦每次扣掉的滑动（点），按毯宽 680 为基准
 const LEASH = +(params.get('leash') ?? 1.25);   // 抓点离周围的点最远不超过静止间距的 1.25 倍
 const STICK = +(params.get('stick') ?? 40);   // 松手后贴地的点慢于每秒 40 点（毯宽 680 为基准）就粘住不动
 const SPASS = +(params.get('spass') ?? 12);   // 限制伸长的遍数：2 遍时猛拖仍会局部拉长 15% 以上，12 遍压到 9% 以内
@@ -257,8 +259,12 @@ let grabTarget = null;
 let grabZ0 = 0;
 let grabStart = null;
 let releasedAt = 0;
-const GRAVITY = 4200;   // 比丝巾重：下落快，不飘
-const thick = () => Math.min(Math.max(place.width * 0.003, 1.2), 2.5);   // 参考视频里的布很薄，叠层只多几个像素
+const GRAVITY = +(params.get('gravity') ?? 4200);   // 比丝巾重：下落快，不飘
+const DAMP = +(params.get('damp') ?? 0.965), THICK_SCALE = +(params.get('thickness') ?? 1);
+const CREASE_BEND = +(params.get('crease') ?? 1), FOLD_FRICTION = +(params.get('foldfric') ?? 1);
+const GRAB_WEIGHT = +(params.get('grabweight') ?? 1), TENT = +(params.get('tent') ?? 0);
+let middleGrab = false, dragAxisX = 1, dragAxisY = 0;
+const thick = () => Math.min(Math.max(place.width * 0.003, 1.2), 2.5) * THICK_SCALE;   // 参考视频里的布很薄，叠层只多几个像素
 const LAYER = () => thick() + 0.5;   // 翻过来那一层的正面离底下一层的距离，至少比厚度多一点
 
 function updateFloor() {
@@ -275,7 +281,7 @@ function coverFrac() {
 }
 function step(dt, restoreK, curlK = 0, extraDamp = 1) {
   const g = GRAVITY * dt * dt;
-  const damp = Math.pow(restoreK > 0 ? 0.9 : 0.965, dt * 120) * (extraDamp < 1 ? Math.pow(extraDamp, dt * 120) : 1);   // 以 120 Hz 子步为基准，和帧率无关
+  const damp = Math.pow(restoreK > 0 ? 0.9 : DAMP, dt * 120) * (extraDamp < 1 ? Math.pow(extraDamp, dt * 120) : 1);   // 以 120 Hz 子步为基准，和帧率无关
   for (let k = 0; k < N; k++) {
     if (inv[k] === 0) continue;
     const o = k * 3;
@@ -314,7 +320,10 @@ function step(dt, restoreK, curlK = 0, extraDamp = 1) {
       if (ws === 0) continue;
       const dx = pos[b] - pos[a], dy = pos[b + 1] - pos[a + 1], dz = pos[b + 2] - pos[a + 2];
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
-      const s = (CS[c] * (d - CL[c] * w)) / (d * ws);
+      // 只有跨过正反面交界的弯曲约束变软；平铺区域仍保持原有抗皱刚度。
+      const crease = CREASE_BEND < 1 && CL[c] > 1.5 / NX && flipped[CA[c]] !== flipped[CB[c]];
+      const stiffness = CS[c] * (crease ? CREASE_BEND : 1);
+      const s = (stiffness * (d - CL[c] * w)) / (d * ws);
       pos[a] += dx * s * wa; pos[a + 1] += dy * s * wa; pos[a + 2] += dz * s * wa;
       pos[b] -= dx * s * wb; pos[b + 1] -= dy * s * wb; pos[b + 2] -= dz * s * wb;
     }
@@ -329,9 +338,16 @@ function step(dt, restoreK, curlK = 0, extraDamp = 1) {
             let fx = pos[o] - prev[o], fy = pos[o + 1] - prev[o + 1];
             if (phase === 'drag') {
               // 抓着拖时是库仑摩擦：每步只扣掉固定的一小段滑动，拉得动就整块跟着走，没被拉的部分贴着不动
-              const m = Math.hypot(fx, fy), cut = Math.min(m, FRIC_DRAG * place.width / 680);
+              // 抓中间时减少沿拖动方向的阻力，同时抑制横向收拢，让两侧顺着手势滑动。
+              if (middleGrab && TENT > 0) {
+                const cross = (-fx * dragAxisY + fy * dragAxisX) * TENT * 0.8;
+                fx += cross * dragAxisY; fy -= cross * dragAxisX;
+              }
+              const directionFriction = middleGrab ? 1 - TENT * 0.75 : 1;
+              const foldFriction = flipped[k] ? FOLD_FRICTION : 1;
+              const m = Math.hypot(fx, fy), cut = Math.min(m, FRIC_DRAG * directionFriction * foldFriction * place.width / 680);
               if (m > 1e-9) { fx *= (m - cut) / m; fy *= (m - cut) / m; }
-            } else if (Math.hypot(fx, fy) < STICK * dt * place.width / 680) { fx = 0; fy = 0; }   // 静摩擦：贴地的点慢慢蹭的时候直接粘住，布不会一直蠕动
+            } else if (Math.hypot(fx, fy) < STICK * (flipped[k] ? FOLD_FRICTION : 1) * dt * place.width / 680) { fx = 0; fy = 0; }   // 静摩擦：贴地的点慢慢蹭的时候直接粘住，布不会一直蠕动
             else { fx *= 0.35; fy *= 0.35; }   // 松手后摩擦大，布停在原地
             pos[o] = prev[o] + fx;
             pos[o + 1] = prev[o + 1] + fy;
@@ -607,6 +623,18 @@ for (let j = NY - 2; j > 0; j -= 2) PERIM.push(idx(0, j));
 // 选中时布拉直：宽度 24 帧里先冲到 1.063 倍（第 14 帧）再回到 1.037 倍，高度一直升到 1.092 倍，
 // 整块抬起，影子变大。取消时 4 帧内线性落回。这些倍数是视频里 764x476 到 792x520 的量。
 const SEL_SX = 792 / 764, SEL_SY = 520 / 476, SEL_LIFT = 16, SEL_PEAK = (812 - 764) / (792 - 764);
+const OPTION_MATCH = +(params.get('optmatch') ?? 0);
+const HANDLE_R = 4 + OPTION_MATCH;
+// 对参考本体轮廓重新测量，不把投影算入尺寸。时间相对按下 Option，独立于重放帧号。
+// 每项为 [帧数, 投影宽度比例, 投影高度比例, 抬起进度]。
+const SELECT_CURVE = [[0,1,1,0],[2,1.0028,1.0029,.15],[4,1.0085,1.005,.35],
+  [7,1.0183,1.0184,.59],[10,1.0293,1.0284,.86],[13,1.0341,1.0336,1],
+  [17,1.037,1.0374,.97],[21,1.0366,1.0361,.95],[27,1.0368,1.0347,.96],[37,1.0367,1.0344,.96]];
+function selectedCurve(frame) {
+  let i = 0; while (i < SELECT_CURVE.length - 2 && frame > SELECT_CURVE[i+1][0]) i++;
+  const a = SELECT_CURVE[i], b = SELECT_CURVE[i+1], u = Math.max(0, Math.min(1, (frame-a[0])/(b[0]-a[0])));
+  return [1,2,3].map((k) => a[k] + (b[k]-a[k])*u);
+}
 let selOn = false, selT0 = -1e9;
 const selNow = { w: 0, h: 0, z: 0 }, selFrom = { w: 0, h: 0, z: 0 };
 function updateSel(now) {
@@ -616,6 +644,14 @@ function updateSel(now) {
     selNow.w = n < 14 ? SEL_PEAK * eo(n / 14) : n < 24 ? SEL_PEAK + (1 - SEL_PEAK) * smooth((n - 14) / 10) : 1;
     selNow.h = smooth(Math.min(n / 24, 1));
     selNow.z = smooth(Math.min(n / 16, 1));
+    if (OPTION_MATCH > 0) {
+      const [wr, hr, lift] = selectedCurve(n - 1), z = 28 * lift;
+      const projection = 1 - z / CAM_DIST;
+      const blend = (a, b) => a + (b-a)*OPTION_MATCH;
+      selNow.w = blend(selNow.w, (wr * projection - 1) / (SEL_SX - 1));
+      selNow.h = blend(selNow.h, (hr * projection - 1) / (SEL_SY - 1));
+      selNow.z = blend(selNow.z, z / SEL_LIFT);
+    }
   } else {
     const u = Math.max(0, 1 - n / 4);
     selNow.w = selFrom.w * u; selNow.h = selFrom.h * u; selNow.z = selFrom.z * u;
@@ -625,7 +661,7 @@ function updateSel(now) {
   const m00 = c * c * sx + si * si * sy, m01 = c * si * (sx - sy), m11 = si * si * sx + c * c * sy;
   rugGroup.matrix.set(m00, m01, 0, place.cx - (m00 * place.cx + m01 * place.cy), m01, m11, 0, place.cy - (m01 * place.cx + m11 * place.cy), 0, 0, 1, SEL_LIFT * pz, 0, 0, 0, 1);
   rugGroup.matrixWorldNeedsUpdate = true;
-  return selOn ? n < 26 : n < 5;   // 还在动画里
+  return selOn ? n < Math.max(26, 39 * OPTION_MATCH) : n < 5;   // 还在动画里
 }
 // 世界坐标里的一点在选中变形之后落在屏幕哪里
 function selScreen(x, y, z = 0) {
@@ -724,7 +760,7 @@ function publishHit() {
 const handles = [0, 1, 2, 3].map(() => {
   const d = document.createElement('div');
   Object.assign(d.style, {
-    position: 'fixed', width: '8px', height: '8px', marginLeft: '-4px', marginTop: '-4px', borderRadius: '50%',
+    position: 'fixed', width: `${HANDLE_R * 2}px`, height: `${HANDLE_R * 2}px`, marginLeft: `${-HANDLE_R}px`, marginTop: `${-HANDLE_R}px`, borderRadius: '50%',
     background: '#fff', boxShadow: '0 0 0 1px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.3)', display: 'none', pointerEvents: 'none',
   });
   document.body.appendChild(d);
@@ -765,8 +801,8 @@ function selUI() {
   const bottom = Math.max(...cs.map((p) => p[1]));
   let deg = Math.round((place.angle * 180) / Math.PI) % 360; if (deg > 180) deg -= 360; if (deg <= -180) deg += 360;
   return {
-    handles: show ? cs : null,
-    pill: show && selNow.h > 0.6 ? [ccx - PILL_W / 2, bottom + PILL_GAP, PILL_W, PILL_H] : null,
+    handles: show && (mode === 'transform' || (now() - selT0) * .06 >= 37 * OPTION_MATCH) ? cs : null,
+    pill: show && (now() - selT0) * .06 >= 21 * OPTION_MATCH && selNow.h > 0.6 - 0.42 * OPTION_MATCH ? [ccx - PILL_W / 2, bottom + PILL_GAP, PILL_W, PILL_H] : null,
     bubble: mode === 'transform' && tf && tf.kind === 'rotate' ? [pointerX + 14, pointerY + 10, deg + '°'] : null,
     // 光标停在角点上（或正按着角点缩放）时，那个角点变蓝（参考视频 f1300）
     hot: show ? cs.findIndex(([x, y], i) => (mode === 'transform' && tf ? tf.kind === 'scale' && i === tf.ci : Math.hypot(x - pointerX, y - pointerY) < 10)) : -1,
@@ -786,7 +822,7 @@ function updateHandles() {
 // 录像和调试截图里没有 DOM，把同样的东西画到二维画布上
 function drawSelUI(g, ox, oy) {
   const ui = selUI();
-  if (ui.handles) for (const [i, [x, y]] of ui.handles.entries()) { g.beginPath(); g.arc(x - ox, y - oy, 4, 0, Math.PI * 2); g.fillStyle = i === ui.hot ? HOT : '#fff'; g.fill(); g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); }
+  if (ui.handles) for (const [i, [x, y]] of ui.handles.entries()) { g.beginPath(); g.arc(x - ox, y - oy, HANDLE_R, 0, Math.PI * 2); g.fillStyle = i === ui.hot ? HOT : '#fff'; g.fill(); g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.stroke(); }
   if (ui.pill) {
     const [x, y, w, h] = ui.pill;
     g.fillStyle = 'rgba(176,131,89,0.94)'; g.beginPath(); g.roundRect(x - ox, y - oy, w, h, h / 2); g.fill();
@@ -829,6 +865,14 @@ function beginGrab(sx, sy) {
   }
   if (best < 0) return false;
   grabK = best;
+  middleGrab = Math.abs(local[best * 2]) < 0.3 && Math.abs(local[best * 2 + 1]) < ASPECT * 0.32;
+  if (GRAB_WEIGHT !== 1) {
+    const radius = 3 / NX;
+    for (let k = 0; k < N; k++) {
+      const d = Math.hypot(local[k * 2] - local[best * 2], local[k * 2 + 1] - local[best * 2 + 1]);
+      inv[k] = d < radius ? GRAB_WEIGHT + (1 - GRAB_WEIGHT) * (d / radius) ** 2 : 1;
+    }
+  }
   inv[grabK] = 0;
   grabStart = [sx, sy];
   grabTarget = new THREE.Vector3(pos[best * 3], pos[best * 3 + 1], pos[best * 3 + 2]);
@@ -845,7 +889,8 @@ function moveGrab(sx, sy) {
   if (grabK < 0 || !grabStart) return;
   const dist = Math.hypot(sx - grabStart[0], sy - grabStart[1]);
   // 6 点死区：鼠标还没明显移动时布不抬；之后每移动 1 点抬 0.16 点，最多抬到毯宽的 10%
-  const lift = Math.min(Math.max(dist - 6, 0) * 0.16, place.width * 0.1);
+  const tent = middleGrab ? TENT : 0;
+  const lift = Math.min(Math.max(dist - 6, 0) * 0.16 * (1 + tent), place.width * 0.1 * (1 + tent * 1.2));
   let z = grabZ0 + lift;
   const p = screenToPlane(sx, sy, z);
   if (!p) return;
@@ -855,7 +900,8 @@ function moveGrab(sx, sy) {
     const base = floorZ[grabK];
     z = base + (grabZ0 + lift - base) * (dr / 32);
   }
-  if (Math.hypot(sx - grabSX, sy - grabSY) > 0.5) grabMoveT = now();
+  const move = Math.hypot(sx - grabSX, sy - grabSY);
+  if (move > 0.5) { grabMoveT = now(); dragAxisX = (sx - grabSX) / move; dragAxisY = -(sy - grabSY) / move; }
   grabSX = sx; grabSY = sy; grabZFull = z;
   holdGrab();
 }
@@ -869,7 +915,8 @@ function holdGrab() {
   if (p) grabTarget.copy(p);
 }
 function endGrab() {
-  if (grabK >= 0) inv[grabK] = 1;
+  if (GRAB_WEIGHT !== 1) inv.fill(1);
+  else if (grabK >= 0) inv[grabK] = 1;
   grabK = -1; grabTarget = null;
   refitPlacement();   // 拖着滑走的布以现在的位置为准，不拉回老地方
   phase = 'falling'; phaseT = 0; calmMs = 0;
@@ -1115,7 +1162,19 @@ function loop(t) {
     if (!it.rect) { g.fillStyle = '#b98f68'; g.fillRect(0, 0, rw, rh); }
     g.drawImage(renderer.domElement, rx * dpr, ry * dpr, rw * dpr, rh * dpr, 0, 0, rw, rh);
     drawSelUI(g, rx, ry);
-    post({ type: 'snap', name: it.name, data: out.toDataURL('image/png').split(',')[1] });
+    let image = out;
+    if (params.get('scoreRaster') === '2' && rw % 2 === 0 && rh % 2 === 0) {
+      // 评分仍使用原来的 2×2 面积平均，只把缩小移到 PNG 编码之前，减少宿主传输和磁盘写入。
+      const src = g.getImageData(0, 0, rw, rh).data;
+      image = document.createElement('canvas'); image.width = rw / 2; image.height = rh / 2;
+      const ctx = image.getContext('2d'), dst = ctx.createImageData(rw / 2, rh / 2);
+      for (let y = 0; y < rh / 2; y++) for (let x = 0; x < rw / 2; x++) {
+        const a = (y * 2 * rw + x * 2) * 4, b = (y * (rw / 2) + x) * 4;
+        for (let c = 0; c < 4; c++) dst.data[b + c] = (src[a+c] + src[a+4+c] + src[a+rw*4+c] + src[a+rw*4+4+c] + 2) >> 2;
+      }
+      ctx.putImageData(dst, 0, 0);
+    }
+    post({ type: 'snap', name: it.name, data: image.toDataURL('image/png').split(',')[1] });
   }
   if (recorder) recorder.draw();
   publishHit();
