@@ -5,5 +5,6 @@ export default {
   "foldfric": 4,
   "damp": 0.9,
   "fdamp": 0.95,
-  "grabweight": 1.5
+  "grabweight": 1.5,
+  "thickness": 0.775
 };
