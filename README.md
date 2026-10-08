@@ -6,6 +6,8 @@
 
 A free, open-source recreation of the rug in [Terkel's video](https://x.com/terkelg/status/2107540718461886464). The concept and visual design are his.
 
+Terkel is building **Rugs**. Join the waitlist at [desktop.cleaning](https://desktop.cleaning). We won’t commercialize Desktop Rug, and it will stay free.
+
 <img src="docs/hero.jpg" alt="A Persian rug lying on a wooden desktop, one corner folded over a pile of icons" width="440">
 
 <br>
