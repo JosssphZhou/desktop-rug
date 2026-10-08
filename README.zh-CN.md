@@ -6,7 +6,7 @@
 
 [Terkel 的视频](https://x.com/terkelg/status/2107540718461886464)里那块地毯的免费开源复刻。地毯的创意和视觉设计都是他的。
 
-Terkel 正在开发 **Rugs**，可以在 [desktop.cleaning](https://desktop.cleaning) 加入候补名单。我们不会将 Desktop Rug 商业化，它将一直免费。
+Terkel 正在开发 **Rugs**，可以在 [desktop.cleaning](https://desktop.cleaning) 加入候补名单。
 
 <img src="docs/hero.jpg" alt="一块波斯地毯铺在木地板桌面上，一角折起盖住了一堆图标" width="440">
 
