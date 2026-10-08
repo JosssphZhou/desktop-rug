@@ -4,6 +4,8 @@
 
 **A rug for your Mac desktop, so you can sweep your mess under it.**
 
+A free, open-source recreation of the rug in [Terkel's video](https://x.com/terkelg/status/2107540718461886464). The concept and visual design are his.
+
 <img src="docs/hero.jpg" alt="A Persian rug lying on a wooden desktop, one corner folded over a pile of icons" width="440">
 
 <br>
@@ -23,7 +25,7 @@ English · [中文](README.zh-CN.md)
 
 Desktop Rug lays a cloth rug across your desktop. It sits above your icons and below every window, so a messy desktop disappears under it. Your files never move. The rug only covers them.
 
-Inspired by [Terkel's video](https://x.com/terkelg/status/2107540718461886464).
+Desktop Rug exists because of [Terkel](https://x.com/terkelg). The rug's concept and visual design are his. We recreated it from his video and wrote the code from scratch, and we release it free and open source under the MIT license. If you like the rug, go follow him.
 
 ## What you can do
 
